@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="capstonetools.esproj">
+    <Build />
+    <Deploy />
+  </Project>
+</Solution>
