@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  # --- Infrastructure ---
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sqlserver
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=YourStrong@Passw0rd!
+    ports:
+      - "1433:1433"
+    networks:
+      - capstone-network
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    networks:
+      - capstone-network
+
+  # --- API Gateway ---
+  api-gateway:
+    build: 
+      context: ./ApiGateway
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    ports:
+      - "5000:8080"
+    depends_on:
+      - identity-svc
+    networks:
+      - capstone-network
+
+  # --- Microservices ---
+  identity-svc:
+    build: 
+      context: ./IdentityService
+      dockerfile: Dockerfile
+    container_name: identity-svc
+    environment:
+      - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=IdentityDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
+    ports:
+      - "8081:8080" # Exposed for direct debugging if needed, but normally routed through YARP
+    depends_on:
+      - sqlserver
+    networks:
+      - capstone-network
+
+networks:
+  capstone-network:
+    driver: bridge
