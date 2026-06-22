@@ -32,6 +32,10 @@ services:
       - "5000:8080"
     depends_on:
       - identity-svc
+      - project-svc
+      - scheduling-svc
+      - evaluation-svc
+      - notification-svc
     networks:
       - capstone-network
 
@@ -47,6 +51,63 @@ services:
       - "8081:8080" # Exposed for direct debugging if needed, but normally routed through YARP
     depends_on:
       - sqlserver
+    networks:
+      - capstone-network
+
+  project-svc:
+    build:
+      context: ./ProjectService
+      dockerfile: Dockerfile
+    container_name: project-svc
+    environment:
+      - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=ProjectDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
+    ports:
+      - "8082:8080"
+    depends_on:
+      - sqlserver
+      - rabbitmq
+    networks:
+      - capstone-network
+
+  scheduling-svc:
+    build:
+      context: ./SchedulingService
+      dockerfile: Dockerfile
+    container_name: scheduling-svc
+    environment:
+      - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=SchedulingDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
+    ports:
+      - "8083:8080"
+    depends_on:
+      - sqlserver
+      - rabbitmq
+    networks:
+      - capstone-network
+
+  evaluation-svc:
+    build:
+      context: ./EvaluationService
+      dockerfile: Dockerfile
+    container_name: evaluation-svc
+    environment:
+      - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=EvaluationDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
+    ports:
+      - "8084:8080"
+    depends_on:
+      - sqlserver
+      - rabbitmq
+    networks:
+      - capstone-network
+
+  notification-svc:
+    build:
+      context: ./NotificationService
+      dockerfile: Dockerfile
+    container_name: notification-svc
+    ports:
+      - "8085:8080"
+    depends_on:
+      - rabbitmq
     networks:
       - capstone-network
 

@@ -3,4 +3,9 @@
     <File Path="docker-compose.yml" />
   </Folder>
   <Project Path="ApiGateway/ApiGateway.csproj" />
+  <Project Path="IdentityService/IdentityService.csproj" />
+  <Project Path="ProjectService/ProjectService.csproj" />
+  <Project Path="SchedulingService/SchedulingService.csproj" />
+  <Project Path="EvaluationService/EvaluationService.csproj" />
+  <Project Path="NotificationService/NotificationService.csproj" />
 </Solution>
