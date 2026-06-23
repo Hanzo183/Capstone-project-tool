@@ -1,0 +1,345 @@
+/* src/pages/SubmissionsPage.css */
+
+.submissions-page-viewport {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 1rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+}
+
+.view-header-block {
+    display: flex;
+    flex-direction: column;
+}
+
+.view-title {
+    font-size: 1.85rem;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0;
+    letter-spacing: -0.02em;
+}
+
+.view-subtitle {
+    color: #4b5563;
+    margin: 0.25rem 0 0 0;
+    font-size: 0.95rem;
+}
+
+/* Glass-morphism Content Frame Layout Structure */
+.portal-glass-card {
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
+    border-radius: 1rem;
+    padding: 1.5rem;
+    box-sizing: border-box;
+}
+
+.card-section-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #0f172a;
+    margin: 0 0 1.25rem 0;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+    padding-bottom: 0.75rem;
+}
+
+/* Master Core Multi-Column Structural Grid */
+.submissions-grid-container {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.75rem;
+}
+
+@media (min-width: 1024px) {
+    .submissions-grid-container {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+/* --- STUDENT EXCLUSIVE UI COMPONENTS --- */
+.drag-drop-zone-box {
+    width: 100%;
+}
+
+.zone-dashed-boundary {
+    border: 2px dashed #cbd5e1;
+    background: rgba(248, 250, 252, 0.5);
+    border-radius: 0.75rem;
+    padding: 3rem 1.5rem;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    transition: border-color 0.2s ease;
+}
+
+    .zone-dashed-boundary:hover {
+        border-color: #6366f1;
+    }
+
+.cloud-icon {
+    font-size: 2.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.primary-prompt-text {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #1e293b;
+    margin: 0;
+}
+
+.secondary-format-text {
+    font-size: 0.8rem;
+    color: #64748b;
+    margin: 0 0 1rem 0;
+}
+
+.action-browse-trigger {
+    background: #6366f1;
+    color: white;
+    border: none;
+    padding: 0.65rem 1.25rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.15);
+}
+
+    .action-browse-trigger:hover {
+        background: #4f46e5;
+    }
+
+/* Vertical History Log Execution List */
+.history-timeline-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.history-log-item {
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.75rem;
+    padding: 1.25rem;
+}
+
+.log-top-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.4rem;
+}
+
+.file-identity {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.version-pill-tag {
+    background: #e0e7ff;
+    color: #4338ca;
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.25rem;
+}
+
+.filename-txt {
+    font-size: 0.95rem;
+    color: #0f172a;
+}
+
+.eval-status-indicator {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 0.15rem 0.5rem;
+    border-radius: 0.25rem;
+}
+
+    .eval-status-indicator.evaluated {
+        background-color: #dcfce7;
+        color: #15803d;
+    }
+
+    .eval-status-indicator.pending-review {
+        background-color: #fef3c7;
+        color: #b45309;
+    }
+
+.metadata-attribution-line {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.75rem;
+    color: #64748b;
+}
+
+.feedback-result-callout {
+    background: #f8fafc;
+    border-left: 3px solid #6366f1;
+    padding: 0.75rem 1rem;
+    border-radius: 0 0.5rem 0.5rem 0;
+}
+
+.score-summary-line {
+    font-size: 0.85rem;
+    color: #475569;
+    margin-bottom: 0.25rem;
+}
+
+    .score-summary-line strong {
+        color: #6366f1;
+    }
+
+.feedback-text-body {
+    margin: 0;
+    font-size: 0.85rem;
+    color: #334155;
+    font-style: italic;
+}
+
+/* --- LECTURER EXCLUSIVE UI COMPONENTS --- */
+.selector-control-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+}
+
+    .selector-control-header label {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #475569;
+    }
+
+.styled-form-dropdown {
+    padding: 0.65rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 0.5rem;
+    background-color: white;
+    font-size: 0.9rem;
+    color: #0f172a;
+    outline: none;
+}
+
+    .styled-form-dropdown:focus {
+        border-color: #6366f1;
+    }
+
+.lecturer-artifact-file-row {
+    display: flex;
+    flex-direction: column;
+}
+
+.artifact-meta-card {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: white;
+    border: 1px solid #e2e8f0;
+    padding: 1rem;
+    border-radius: 0.75rem;
+}
+
+.file-icon-block {
+    font-size: 2rem;
+}
+
+.file-text-block {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+    .file-text-block strong {
+        font-size: 0.95rem;
+        color: #0f172a;
+    }
+
+    .file-text-block span {
+        font-size: 0.75rem;
+        color: #64748b;
+    }
+
+.btn-download-link {
+    background: #f1f5f9;
+    color: #475569;
+    text-decoration: none;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.5rem 0.85rem;
+    border-radius: 0.375rem;
+    transition: all 0.2s ease;
+}
+
+    .btn-download-link:hover {
+        background: #1e293b;
+        color: white;
+    }
+
+/* Input Form Layouts */
+.evaluation-input-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.form-input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.input-field-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #475569;
+}
+
+.styled-form-textbox {
+    padding: 0.65rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 0.5rem;
+    font-size: 0.9rem;
+}
+
+.styled-form-textarea {
+    padding: 0.75rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 0.5rem;
+    font-size: 0.9rem;
+    font-family: inherit;
+    resize: vertical;
+}
+
+    .styled-form-textbox:focus,
+    .styled-form-textarea:focus {
+        border-color: #6366f1;
+        outline: none;
+    }
+
+.btn-submit-evaluation-trigger {
+    background: #1e293b;
+    color: white;
+    border: none;
+    padding: 0.75rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+    .btn-submit-evaluation-trigger:hover {
+        background: #6366f1;
+    }

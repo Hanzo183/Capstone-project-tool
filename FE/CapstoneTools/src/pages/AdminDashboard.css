@@ -1,0 +1,341 @@
+/* src/pages/AdminDashboard.css */
+
+.admin-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+}
+
+.admin-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.admin-title {
+    font-size: 2rem;
+    font-weight: 800;
+    margin: 0;
+    color: #1f2937;
+}
+
+.admin-subtitle {
+    color: #4b5563;
+    margin: 0.25rem 0 0 0;
+}
+
+.btn-action-primary {
+    background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+    color: white;
+    border: none;
+    padding: 0.65rem 1.25rem;
+    border-radius: 0.5rem;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 10px rgba(49, 46, 129, 0.2);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+    .btn-action-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 15px rgba(49, 46, 129, 0.35);
+    }
+
+/* KPI Grids & Scaled Hovers */
+.kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(1, 1fr);
+    gap: 1.5rem;
+}
+
+@media (min-width: 640px) {
+    .kpi-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (min-width: 1024px) {
+    .kpi-grid {
+        grid-template-columns: repeat(4, 1fr);
+    }
+}
+
+.kpi-card {
+    display: flex;
+    flex-direction: column;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: default;
+}
+
+    .kpi-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 15px 30px rgba(0, 0, 0, 0.08);
+        background: rgba(255, 255, 255, 0.8);
+    }
+
+.kpi-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    color: #6b7280;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+}
+
+.kpi-value {
+    font-size: 2.25rem;
+    font-weight: 900;
+    margin: 0.5rem 0;
+    color: #111827;
+}
+
+.warning-color {
+    color: #d97706;
+}
+
+.critical-color {
+    color: #dc2626;
+}
+
+.kpi-indicator {
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-top: auto;
+}
+
+    .kpi-indicator.green {
+        color: #16a34a;
+    }
+
+    .kpi-indicator.yellow {
+        color: #b45309;
+    }
+
+    .kpi-indicator.red {
+        color: #b91c1c;
+    }
+
+    .kpi-indicator.regular {
+        color: #4f46e5;
+    }
+
+/* Dashboard Workspace Split */
+.admin-workspace-layout {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2rem;
+}
+
+@media (min-width: 1024px) {
+    .admin-workspace-layout {
+        grid-template-columns: 2fr 1fr;
+    }
+}
+
+.section-header-inline {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+}
+
+.section-block-title {
+    margin: 0;
+    font-size: 1.125rem;
+    font-weight: 700;
+    color: #111827;
+}
+
+.text-link-btn {
+    background: none;
+    border: none;
+    color: #2563eb;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+    .text-link-btn:hover {
+        text-decoration: underline;
+    }
+
+/* Table Setup with Row Hover transitions */
+.table-responsive-container {
+    overflow-x: auto;
+}
+
+.admin-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+}
+
+    .admin-table th {
+        padding: 0.75rem 1rem;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        color: #6b7280;
+        font-weight: 700;
+        border-bottom: 2px solid rgba(0,0,0,0.05);
+    }
+
+    .admin-table td {
+        padding: 1rem;
+        border-bottom: 1px solid rgba(0,0,0,0.04);
+    }
+
+.interactive-row {
+    transition: background-color 0.2s ease;
+}
+
+    .interactive-row:hover {
+        background-color: rgba(255, 255, 255, 0.5);
+    }
+
+.user-profile-cell {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.profile-avatar-placeholder {
+    width: 2.25rem;
+    height: 2.25rem;
+    background-color: #e0e7ff;
+    color: #4338ca;
+    font-weight: 700;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.profile-name-txt {
+    margin: 0;
+    font-weight: 600;
+    color: #111827;
+    font-size: 0.9rem;
+}
+
+.profile-sub-email {
+    margin: 0;
+    font-size: 0.75rem;
+    color: #6b7280;
+}
+
+/* Status / Role Badges */
+.role-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.375rem;
+}
+
+    .role-badge.lecturer {
+        background-color: #f3e8ff;
+        color: #6b21a8;
+    }
+
+    .role-badge.councilmember {
+        background-color: #fef3c7;
+        color: #92400e;
+    }
+
+    .role-badge.student {
+        background-color: #e0f2fe;
+        color: #0369a1;
+    }
+
+.node-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.125rem 0.5rem;
+    border-radius: 9999px;
+}
+
+    .node-badge.active {
+        background-color: #dcfce7;
+        color: #16a34a;
+    }
+
+    .node-badge.inactive {
+        background-color: #f3f4f6;
+        color: #4b5563;
+    }
+
+.row-action-btn {
+    background: white;
+    border: 1px solid #d1d5db;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    border-radius: 0.25rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+    .row-action-btn:hover {
+        background: #f3f4f6;
+        border-color: #9ca3af;
+    }
+
+/* Control Boxes Layout */
+.operations-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+.operation-item-box {
+    background: rgba(255, 255, 255, 0.4);
+    border: 1px solid rgba(0,0,0,0.05);
+    padding: 1rem;
+    border-radius: 0.75rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+}
+
+.op-info h5 {
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #111827;
+}
+
+.op-info p {
+    margin: 0.15rem 0 0 0;
+    font-size: 0.75rem;
+    color: #6b7280;
+}
+
+.btn-op-trigger {
+    background: white;
+    border: 1px solid #cbd5e1;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+    .btn-op-trigger:hover {
+        background: #0f172a;
+        color: white;
+        border-color: #0f172a;
+    }
+
+.broker-status-tag.healthy {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #15803d;
+    background-color: #dcfce7;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.375rem;
+}

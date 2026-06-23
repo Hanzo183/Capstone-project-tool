@@ -1,0 +1,148 @@
+/* src/components/Layout.css */
+
+.workspace-layout-container {
+    display: flex;
+    min-height: 100vh;
+    width: 100vw;
+    background-color: #f8fafc;
+    font-family: system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+}
+
+/* Master Fixed Sidebar Frame Grid */
+.workspace-sidebar {
+    width: 260px;
+    background: linear-gradient(180deg, #0f172a 0%, #1e1b4b 100%);
+    color: #94a3b8;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid rgba(255, 255, 255, 0.05);
+    box-sizing: border-box;
+}
+
+.sidebar-brand-block {
+    padding: 2rem 1.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.brand-title {
+    color: white;
+    font-size: 1.25rem;
+    font-weight: 800;
+    margin: 0 0 0.35rem 0;
+    letter-spacing: -0.025em;
+}
+
+.user-role-badge {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    background: rgba(99, 102, 241, 0.15);
+    color: #818cf8;
+    padding: 0.2rem 0.5rem;
+    border-radius: 0.25rem;
+    letter-spacing: 0.05em;
+}
+
+/* Nav Item Link Stacking */
+.sidebar-nav-links {
+    flex: 1;
+    padding: 1.5rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.nav-anchor-link {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    color: #94a3b8;
+    text-decoration: none;
+    padding: 0.75rem 1rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    border-radius: 0.5rem;
+    transition: all 0.2s ease;
+}
+
+    .nav-anchor-link:hover {
+        color: white;
+        background: rgba(255, 255, 255, 0.03);
+    }
+
+    /* React Router Active Routing States */
+    .nav-anchor-link.active-node {
+        background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+        color: white;
+        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
+    }
+
+.link-icon {
+    font-size: 1.1rem;
+}
+
+/* Footer Section Containing Exit Actions */
+.sidebar-action-footer {
+    padding: 1rem 0.75rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.sidebar-logout-trigger {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: transparent;
+    border: none;
+    color: #f87171;
+    padding: 0.75rem 1rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    border-radius: 0.5rem;
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+    .sidebar-logout-trigger:hover {
+        background: rgba(239, 68, 68, 0.08);
+        color: #ef4444;
+    }
+
+/* Application Viewport Space (Right side panel) */
+.workspace-view-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.workspace-top-bar {
+    background: white;
+    height: 60px;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    align-items: center;
+    padding: 0 2rem;
+}
+
+.environment-breadcrumb {
+    font-size: 0.85rem;
+    color: #64748b;
+    font-weight: 500;
+}
+
+    .environment-breadcrumb span {
+        color: #0f172a;
+        font-weight: 600;
+    }
+
+.workspace-child-view-outlet {
+    flex: 1;
+    padding: 2rem;
+    overflow-y: auto;
+    box-sizing: border-box;
+}
