@@ -1,34 +1,42 @@
+using System.Security.Cryptography;
+using Microsoft.EntityFrameworkCore;
+
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
 });
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+builder.Services.AddDbContext<EvaluationDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 var app = builder.Build();
 app.UseCors();
+app.UseSwagger();
+app.UseSwaggerUI();
 
-var projectId = Guid.NewGuid();
-var roundId = Guid.NewGuid();
-var evaluations = new List<EvaluationItem>
+app.MapGet("/health", async (EvaluationDbContext db) =>
 {
-    new(Guid.NewGuid(), projectId, roundId, "CM001", 8.5m, "Architecture is clear; add stronger testing evidence.", DateTimeOffset.UtcNow.AddHours(-8))
-};
-var rebuttals = new List<RebuttalItem>();
+    var canConnect = await db.Database.CanConnectAsync();
+    return Results.Ok(new { service = "evaluation", status = canConnect ? "healthy" : "database-unavailable" });
+});
 
-app.MapGet("/health", () => Results.Ok(new { service = "evaluation", status = "healthy" }));
-
-app.MapPost("/evaluations", (CreateEvaluationRequest request) =>
+app.MapPost("/evaluations", async (CreateEvaluationRequest request, EvaluationDbContext db) =>
 {
-    var evaluation = new EvaluationItem(
-        Guid.NewGuid(),
-        request.ProjectId,
-        request.RoundId,
-        request.EvaluatorId,
-        request.Score,
-        request.Feedback,
-        DateTimeOffset.UtcNow);
+    var evaluation = new EvaluationItem
+    {
+        Id = ShortId.New("EVA"),
+        ProjectId = request.ProjectId,
+        RoundId = request.RoundId,
+        EvaluatorId = request.EvaluatorId,
+        Score = request.Score,
+        Feedback = request.Feedback,
+        SubmittedAt = DateTime.UtcNow
+    };
 
-    evaluations.Add(evaluation);
+    db.Evaluations.Add(evaluation);
+    await db.SaveChangesAsync();
 
     return Results.Accepted($"/evaluations/project/{request.ProjectId}", new
     {
@@ -37,23 +45,47 @@ app.MapPost("/evaluations", (CreateEvaluationRequest request) =>
     });
 });
 
-app.MapGet("/evaluations/project/{projectId:guid}", (Guid projectId) =>
+app.MapGet("/evaluations/project/{projectId}", async (string projectId, EvaluationDbContext db) =>
 {
-    var projectEvaluations = evaluations.Where(item => item.ProjectId == projectId).OrderByDescending(item => item.SubmittedAt);
+    var projectEvaluations = await db.Evaluations
+        .AsNoTracking()
+        .Where(item => item.ProjectId == projectId)
+        .OrderByDescending(item => item.SubmittedAt)
+        .ToListAsync();
+
     return Results.Ok(projectEvaluations);
 });
 
-app.MapGet("/evaluations", () => Results.Ok(evaluations.OrderByDescending(item => item.SubmittedAt)));
-
-app.MapPost("/rebuttals", (CreateRebuttalRequest request) =>
+app.MapGet("/evaluations", async (EvaluationDbContext db) =>
 {
-    if (evaluations.All(item => item.Id != request.EvaluationId))
+    var evaluations = await db.Evaluations
+        .AsNoTracking()
+        .OrderByDescending(item => item.SubmittedAt)
+        .ToListAsync();
+
+    return Results.Ok(evaluations);
+});
+
+app.MapPost("/rebuttals", async (CreateRebuttalRequest request, EvaluationDbContext db) =>
+{
+    var evaluationExists = await db.Evaluations.AnyAsync(item => item.Id == request.EvaluationId);
+    if (!evaluationExists)
     {
         return Results.NotFound(new { message = "Evaluation was not found." });
     }
 
-    var rebuttal = new RebuttalItem(Guid.NewGuid(), request.EvaluationId, request.StudentId, request.Content, "Pending", null, DateTimeOffset.UtcNow);
-    rebuttals.Add(rebuttal);
+    var rebuttal = new RebuttalItem
+    {
+        Id = ShortId.New("REB"),
+        EvaluationId = request.EvaluationId,
+        StudentId = request.StudentId,
+        Content = request.Content,
+        Status = "Pending",
+        SubmittedAt = DateTime.UtcNow
+    };
+
+    db.Rebuttals.Add(rebuttal);
+    await db.SaveChangesAsync();
 
     return Results.Accepted($"/rebuttals/{rebuttal.Id}", new
     {
@@ -62,44 +94,92 @@ app.MapPost("/rebuttals", (CreateRebuttalRequest request) =>
     });
 });
 
-app.MapGet("/rebuttals", (string? status) =>
+app.MapGet("/rebuttals", async (string? status, EvaluationDbContext db) =>
 {
-    var query = rebuttals.AsEnumerable();
+    var query = db.Rebuttals.AsNoTracking();
+
     if (!string.IsNullOrWhiteSpace(status))
     {
-        query = query.Where(item => item.Status.Equals(status, StringComparison.OrdinalIgnoreCase));
+        query = query.Where(item => item.Status == status);
     }
 
-    return Results.Ok(query.OrderByDescending(item => item.SubmittedAt));
+    var rebuttals = await query.OrderByDescending(item => item.SubmittedAt).ToListAsync();
+    return Results.Ok(rebuttals);
 });
 
-app.MapPut("/rebuttals/{id:guid}/status", (Guid id, UpdateRebuttalStatusRequest request) =>
+app.MapPut("/rebuttals/{id}/status", async (string id, UpdateRebuttalStatusRequest request, EvaluationDbContext db) =>
 {
-    var index = rebuttals.FindIndex(item => item.Id == id);
-    if (index < 0)
+    var rebuttal = await db.Rebuttals.FirstOrDefaultAsync(item => item.Id == id);
+    if (rebuttal is null)
     {
         return Results.NotFound();
     }
 
-    rebuttals[index] = rebuttals[index] with { Status = request.Status, ReviewedAt = DateTimeOffset.UtcNow };
-    return Results.Ok(rebuttals[index]);
+    rebuttal.Status = request.Status;
+    rebuttal.ReviewedAt = DateTime.UtcNow;
+    await db.SaveChangesAsync();
+
+    return Results.Ok(rebuttal);
 });
 
-app.MapGet("/reports/{roundId:guid}", (Guid roundId) =>
+app.MapGet("/reports/{roundId}", async (string roundId, EvaluationDbContext db) =>
 {
-    var roundEvaluations = evaluations.Where(item => item.RoundId == roundId).ToList();
+    var roundEvaluations = await db.Evaluations
+        .AsNoTracking()
+        .Where(item => item.RoundId == roundId)
+        .OrderByDescending(item => item.Score)
+        .ToListAsync();
+
     return Results.Ok(new RoundReport(
         roundId,
         roundEvaluations.Count,
         roundEvaluations.Count == 0 ? 0 : Math.Round(roundEvaluations.Average(item => item.Score), 2),
-        roundEvaluations.OrderByDescending(item => item.Score)));
+        roundEvaluations));
 });
 
 app.Run();
 
-record EvaluationItem(Guid Id, Guid ProjectId, Guid RoundId, string EvaluatorId, decimal Score, string Feedback, DateTimeOffset SubmittedAt);
-record RebuttalItem(Guid Id, Guid EvaluationId, string StudentId, string Content, string Status, DateTimeOffset? ReviewedAt, DateTimeOffset SubmittedAt);
-record RoundReport(Guid RoundId, int EvaluationCount, decimal AverageScore, IEnumerable<EvaluationItem> Evaluations);
-record CreateEvaluationRequest(Guid ProjectId, Guid RoundId, string EvaluatorId, decimal Score, string Feedback);
-record CreateRebuttalRequest(Guid EvaluationId, string StudentId, string Content);
+sealed class EvaluationDbContext(DbContextOptions<EvaluationDbContext> options) : DbContext(options)
+{
+    public DbSet<EvaluationItem> Evaluations => Set<EvaluationItem>();
+    public DbSet<RebuttalItem> Rebuttals => Set<RebuttalItem>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<EvaluationItem>().ToTable("Evaluations").HasKey(item => item.Id);
+        modelBuilder.Entity<EvaluationItem>().Property(item => item.Score).HasPrecision(5, 2);
+        modelBuilder.Entity<RebuttalItem>().ToTable("Rebuttals").HasKey(item => item.Id);
+    }
+}
+
+sealed class EvaluationItem
+{
+    public string Id { get; set; } = "";
+    public string ProjectId { get; set; } = "";
+    public string RoundId { get; set; } = "";
+    public string EvaluatorId { get; set; } = "";
+    public decimal Score { get; set; }
+    public string? Feedback { get; set; }
+    public DateTime SubmittedAt { get; set; }
+}
+
+sealed class RebuttalItem
+{
+    public string Id { get; set; } = "";
+    public string EvaluationId { get; set; } = "";
+    public string StudentId { get; set; } = "";
+    public string Content { get; set; } = "";
+    public string Status { get; set; } = "Pending";
+    public DateTime SubmittedAt { get; set; }
+    public DateTime? ReviewedAt { get; set; }
+}
+
+static class ShortId
+{
+    public static string New(string prefix) => $"{prefix}-{RandomNumberGenerator.GetHexString(8)}";
+}
+
+record RoundReport(string RoundId, int EvaluationCount, decimal AverageScore, IEnumerable<EvaluationItem> Evaluations);
+record CreateEvaluationRequest(string ProjectId, string RoundId, string EvaluatorId, decimal Score, string? Feedback);
+record CreateRebuttalRequest(string EvaluationId, string StudentId, string Content);
 record UpdateRebuttalStatusRequest(string Status);

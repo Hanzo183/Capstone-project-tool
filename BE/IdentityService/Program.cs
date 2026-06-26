@@ -1,112 +1,150 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
 });
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+builder.Services.AddDbContext<IdentityDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+var jwtSecret = builder.Configuration["Jwt:SigningKey"] ?? "capstone-review-tool-development-signing-key";
 
 var app = builder.Build();
 app.UseCors();
+app.UseSwagger();
+app.UseSwaggerUI();
 
-var users = new List<UserAccount>
+app.MapGet("/health", async (IdentityDbContext db) =>
 {
-    UserAccount.Create("SE192737", "Luong Pham Binh Minh", "minh.backend@fpt.edu.vn", "Backend123!", "Admin"),
-    UserAccount.Create("SE192706", "Nguyen Chinh Nhan", "nhan.frontend@fpt.edu.vn", "Frontend123!", "Student"),
-    UserAccount.Create("SE192879", "Tran Tuan Minh", "minh.jobs@fpt.edu.vn", "Jobs123!", "Lecturer"),
-    UserAccount.Create("CM001", "Council Reviewer", "council@fpt.edu.vn", "Council123!", "CouncilMember")
-};
+    var canConnect = await db.Database.CanConnectAsync();
+    return Results.Ok(new { service = "identity", status = canConnect ? "healthy" : "database-unavailable" });
+});
 
-var refreshTokens = new Dictionary<string, Guid>();
-var jwtSecret = builder.Configuration["Jwt:SigningKey"] ?? "capstone-review-tool-development-signing-key";
-
-app.MapGet("/health", () => Results.Ok(new { service = "identity", status = "healthy" }));
-
-app.MapPost("/auth/register", (RegisterRequest request) =>
+app.MapPost("/auth/register", async (RegisterRequest request, IdentityDbContext db) =>
 {
-    if (users.Any(user => user.Email.Equals(request.Email, StringComparison.OrdinalIgnoreCase)))
+    var emailExists = await db.Users.AnyAsync(user => user.Email == request.Email);
+    if (emailExists)
     {
         return Results.Conflict(new { message = "Email is already registered." });
     }
 
     var user = UserAccount.Create(request.StudentId, request.FullName, request.Email, request.Password, request.Role);
-    users.Add(user);
+    db.Users.Add(user);
+    await db.SaveChangesAsync();
 
     return Results.Created($"/users/{user.Id}", ToUserResponse(user));
 });
 
-app.MapPost("/auth/login", (LoginRequest request) =>
+app.MapPost("/auth/login", async (LoginRequest request, IdentityDbContext db) =>
 {
-    var user = users.FirstOrDefault(candidate => candidate.Email.Equals(request.Email, StringComparison.OrdinalIgnoreCase));
+    var user = await db.Users.FirstOrDefaultAsync(candidate => candidate.Email == request.Email);
     if (user is null || !user.IsActive || !VerifyPassword(request.Password, user.PasswordHash))
     {
         return Results.Unauthorized();
     }
 
     var refreshToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(48));
-    refreshTokens[refreshToken] = user.Id;
+    db.RefreshTokens.Add(new RefreshToken
+    {
+        Id = ShortId.New("RT"),
+        UserId = user.Id,
+        Token = refreshToken,
+        ExpiresAt = DateTime.UtcNow.AddDays(7),
+        IsRevoked = false,
+        CreatedAt = DateTime.UtcNow
+    });
+    await db.SaveChangesAsync();
 
     return Results.Ok(new AuthResponse(
         CreateJwt(user, jwtSecret),
         refreshToken,
-        DateTimeOffset.UtcNow.AddMinutes(15),
+        DateTime.UtcNow.AddMinutes(15),
         ToUserResponse(user)));
 });
 
-app.MapPost("/auth/refresh", (RefreshRequest request) =>
+app.MapPost("/auth/refresh", async (RefreshRequest request, IdentityDbContext db) =>
 {
-    if (!refreshTokens.Remove(request.RefreshToken, out var userId))
+    var storedRefreshToken = await db.RefreshTokens
+        .Include(token => token.User)
+        .FirstOrDefaultAsync(token => token.Token == request.RefreshToken);
+
+    if (storedRefreshToken is null ||
+        storedRefreshToken.IsRevoked ||
+        storedRefreshToken.ExpiresAt <= DateTime.UtcNow ||
+        storedRefreshToken.User is null ||
+        !storedRefreshToken.User.IsActive)
     {
         return Results.Unauthorized();
     }
 
-    var user = users.FirstOrDefault(candidate => candidate.Id == userId);
-    if (user is null || !user.IsActive)
-    {
-        return Results.Unauthorized();
-    }
+    storedRefreshToken.IsRevoked = true;
 
     var nextRefreshToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(48));
-    refreshTokens[nextRefreshToken] = user.Id;
+    db.RefreshTokens.Add(new RefreshToken
+    {
+        Id = ShortId.New("RT"),
+        UserId = storedRefreshToken.UserId,
+        Token = nextRefreshToken,
+        ExpiresAt = DateTime.UtcNow.AddDays(7),
+        IsRevoked = false,
+        CreatedAt = DateTime.UtcNow
+    });
+    await db.SaveChangesAsync();
 
     return Results.Ok(new AuthResponse(
-        CreateJwt(user, jwtSecret),
+        CreateJwt(storedRefreshToken.User, jwtSecret),
         nextRefreshToken,
-        DateTimeOffset.UtcNow.AddMinutes(15),
-        ToUserResponse(user)));
+        DateTime.UtcNow.AddMinutes(15),
+        ToUserResponse(storedRefreshToken.User)));
 });
 
-app.MapGet("/users", () => Results.Ok(users.Select(ToUserResponse)));
-
-app.MapGet("/users/{id:guid}", (Guid id) =>
+app.MapGet("/users", async (IdentityDbContext db) =>
 {
-    var user = users.FirstOrDefault(candidate => candidate.Id == id);
+    var users = await db.Users
+        .AsNoTracking()
+        .OrderBy(user => user.FullName)
+        .ToListAsync();
+
+    return Results.Ok(users.Select(ToUserResponse));
+});
+
+app.MapGet("/users/{id}", async (string id, IdentityDbContext db) =>
+{
+    var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id);
     return user is null ? Results.NotFound() : Results.Ok(ToUserResponse(user));
 });
 
-app.MapPut("/users/{id:guid}/role", (Guid id, UpdateRoleRequest request) =>
+app.MapPut("/users/{id}/role", async (string id, UpdateRoleRequest request, IdentityDbContext db) =>
 {
-    var user = users.FirstOrDefault(candidate => candidate.Id == id);
+    var user = await db.Users.FirstOrDefaultAsync(candidate => candidate.Id == id);
     if (user is null)
     {
         return Results.NotFound();
     }
 
     user.Role = request.Role;
+    await db.SaveChangesAsync();
+
     return Results.Ok(ToUserResponse(user));
 });
 
-app.MapPut("/users/{id:guid}/status", (Guid id, UpdateStatusRequest request) =>
+app.MapPut("/users/{id}/status", async (string id, UpdateStatusRequest request, IdentityDbContext db) =>
 {
-    var user = users.FirstOrDefault(candidate => candidate.Id == id);
+    var user = await db.Users.FirstOrDefaultAsync(candidate => candidate.Id == id);
     if (user is null)
     {
         return Results.NotFound();
     }
 
     user.IsActive = request.IsActive;
+    await db.SaveChangesAsync();
+
     return Results.Ok(ToUserResponse(user));
 });
 
@@ -151,26 +189,59 @@ static string CreateJwt(UserAccount user, string secret)
 static string Base64Url(byte[] bytes) =>
     Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
+sealed class IdentityDbContext(DbContextOptions<IdentityDbContext> options) : DbContext(options)
+{
+    public DbSet<UserAccount> Users => Set<UserAccount>();
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<UserAccount>().ToTable("Users");
+        modelBuilder.Entity<UserAccount>().HasKey(user => user.Id);
+        modelBuilder.Entity<UserAccount>().HasIndex(user => user.Email).IsUnique();
+        modelBuilder.Entity<RefreshToken>().ToTable("RefreshTokens");
+        modelBuilder.Entity<RefreshToken>().HasKey(token => token.Id);
+        modelBuilder.Entity<RefreshToken>()
+            .HasOne(token => token.User)
+            .WithMany()
+            .HasForeignKey(token => token.UserId);
+    }
+}
+
 sealed class UserAccount
 {
-    public Guid Id { get; init; } = Guid.NewGuid();
-    public required string StudentId { get; init; }
-    public required string FullName { get; init; }
-    public required string Email { get; init; }
-    public required string PasswordHash { get; init; }
-    public required string Role { get; set; }
+    public string Id { get; set; } = "";
+    public string? StudentId { get; set; }
+    public string FullName { get; set; } = "";
+    public string Email { get; set; } = "";
+    public string PasswordHash { get; set; } = "";
+    public string Role { get; set; } = "";
     public bool IsActive { get; set; } = true;
-    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
+    public DateTime CreatedAt { get; set; }
 
-    public static UserAccount Create(string studentId, string fullName, string email, string password, string role) =>
+    public static UserAccount Create(string? studentId, string fullName, string email, string password, string role) =>
         new()
         {
+            Id = studentId?.StartsWith("SE", StringComparison.OrdinalIgnoreCase) == true ? studentId : ShortId.New("USR"),
             StudentId = studentId,
             FullName = fullName,
             Email = email,
             PasswordHash = PasswordHasher.HashPassword(password),
-            Role = role
+            Role = role,
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow
         };
+}
+
+sealed class RefreshToken
+{
+    public string Id { get; set; } = "";
+    public string UserId { get; set; } = "";
+    public string Token { get; set; } = "";
+    public DateTime ExpiresAt { get; set; }
+    public bool IsRevoked { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public UserAccount? User { get; set; }
 }
 
 static class PasswordHasher
@@ -183,10 +254,15 @@ static class PasswordHasher
     }
 }
 
-record RegisterRequest(string StudentId, string FullName, string Email, string Password, string Role);
+static class ShortId
+{
+    public static string New(string prefix) => $"{prefix}-{RandomNumberGenerator.GetHexString(8)}";
+}
+
+record RegisterRequest(string? StudentId, string FullName, string Email, string Password, string Role);
 record LoginRequest(string Email, string Password);
 record RefreshRequest(string RefreshToken);
 record UpdateRoleRequest(string Role);
 record UpdateStatusRequest(bool IsActive);
-record UserResponse(Guid Id, string StudentId, string FullName, string Email, string Role, bool IsActive, DateTimeOffset CreatedAt);
-record AuthResponse(string AccessToken, string RefreshToken, DateTimeOffset ExpiresAt, UserResponse User);
+record UserResponse(string Id, string? StudentId, string FullName, string Email, string Role, bool IsActive, DateTime CreatedAt);
+record AuthResponse(string AccessToken, string RefreshToken, DateTime ExpiresAt, UserResponse User);

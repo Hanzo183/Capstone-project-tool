@@ -1,85 +1,104 @@
+using System.Security.Cryptography;
+using Microsoft.EntityFrameworkCore;
+
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
 });
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+builder.Services.AddDbContext<ProjectDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 var app = builder.Build();
 app.UseCors();
+app.UseSwagger();
+app.UseSwaggerUI();
 
-var projects = new List<ProjectItem>
+app.MapGet("/health", async (ProjectDbContext db) =>
 {
-    new(Guid.NewGuid(), "AI Review Scheduler", "Team 6", "SE192879", "In Review", "Spring 2025 Round 1", DateTimeOffset.UtcNow.AddDays(-12), DateTimeOffset.UtcNow.AddHours(-4)),
-    new(Guid.NewGuid(), "Submission Quality Tracker", "Team 2", "SE192879", "Submitted", "Spring 2025 Round 1", DateTimeOffset.UtcNow.AddDays(-9), DateTimeOffset.UtcNow.AddDays(-1)),
-    new(Guid.NewGuid(), "Council Scoring Portal", "Team 4", "SE192737", "Needs Revision", "Spring 2025 Round 1", DateTimeOffset.UtcNow.AddDays(-7), DateTimeOffset.UtcNow.AddHours(-10))
-};
+    var canConnect = await db.Database.CanConnectAsync();
+    return Results.Ok(new { service = "project", status = canConnect ? "healthy" : "database-unavailable" });
+});
 
-var submissions = new List<SubmissionItem>
+app.MapGet("/projects", async (string? status, string? round, string? reviewer, ProjectDbContext db) =>
 {
-    new(Guid.NewGuid(), projects[0].Id, "proposal-v1.pdf", "https://files.local/proposal-v1.pdf", 1, DateTimeOffset.UtcNow.AddDays(-5), "SE192706"),
-    new(Guid.NewGuid(), projects[0].Id, "architecture-v2.pdf", "https://files.local/architecture-v2.pdf", 2, DateTimeOffset.UtcNow.AddDays(-1), "SE192706")
-};
-
-app.MapGet("/health", () => Results.Ok(new { service = "project", status = "healthy" }));
-
-app.MapGet("/projects", (string? status, string? round, string? reviewer) =>
-{
-    var query = projects.AsEnumerable();
+    var query = db.Projects.AsNoTracking();
 
     if (!string.IsNullOrWhiteSpace(status))
     {
-        query = query.Where(project => project.Status.Equals(status, StringComparison.OrdinalIgnoreCase));
+        query = query.Where(project => project.Status == status);
     }
 
     if (!string.IsNullOrWhiteSpace(round))
     {
-        query = query.Where(project => project.RoundId.Contains(round, StringComparison.OrdinalIgnoreCase));
+        query = query.Where(project => project.RoundId != null && project.RoundId.Contains(round));
     }
 
     if (!string.IsNullOrWhiteSpace(reviewer))
     {
-        query = query.Where(project => project.LecturerId.Equals(reviewer, StringComparison.OrdinalIgnoreCase));
+        query = query.Where(project => project.LecturerId == reviewer);
     }
 
-    return Results.Ok(query.OrderByDescending(project => project.UpdatedAt));
+    var projects = await query.OrderByDescending(project => project.UpdatedAt).ToListAsync();
+    return Results.Ok(projects);
 });
 
-app.MapPost("/projects", (CreateProjectRequest request) =>
+app.MapPost("/projects", async (CreateProjectRequest request, ProjectDbContext db) =>
 {
-    var project = new ProjectItem(
-        Guid.NewGuid(),
-        request.Title,
-        request.TeamId,
-        request.LecturerId,
-        "Draft",
-        request.RoundId,
-        DateTimeOffset.UtcNow,
-        DateTimeOffset.UtcNow);
+    var project = new ProjectItem
+    {
+        Id = ShortId.New("PRJ"),
+        Title = request.Title,
+        TeamId = request.TeamId,
+        LecturerId = request.LecturerId,
+        Status = "Draft",
+        RoundId = request.RoundId,
+        CreatedAt = DateTime.UtcNow,
+        UpdatedAt = DateTime.UtcNow
+    };
 
-    projects.Add(project);
+    db.Projects.Add(project);
+    await db.SaveChangesAsync();
+
     return Results.Created($"/projects/{project.Id}", project);
 });
 
-app.MapGet("/projects/{id:guid}", (Guid id) =>
+app.MapGet("/projects/{id}", async (string id, ProjectDbContext db) =>
 {
-    var project = projects.FirstOrDefault(candidate => candidate.Id == id);
+    var project = await db.Projects.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id);
     return project is null ? Results.NotFound() : Results.Ok(project);
 });
 
-app.MapPost("/projects/{id:guid}/submit", (Guid id, SubmitProjectRequest request) =>
+app.MapPost("/projects/{id}/submit", async (string id, SubmitProjectRequest request, ProjectDbContext db) =>
 {
-    var projectIndex = projects.FindIndex(candidate => candidate.Id == id);
-    if (projectIndex < 0)
+    var project = await db.Projects.FirstOrDefaultAsync(candidate => candidate.Id == id);
+    if (project is null)
     {
         return Results.NotFound();
     }
 
-    var nextVersion = submissions.Where(item => item.ProjectId == id).Select(item => item.Version).DefaultIfEmpty(0).Max() + 1;
-    var submission = new SubmissionItem(Guid.NewGuid(), id, request.FileName, request.FileUrl, nextVersion, DateTimeOffset.UtcNow, request.SubmittedBy);
-    submissions.Add(submission);
+    var nextVersion = await db.Submissions
+        .Where(item => item.ProjectId == id)
+        .Select(item => (int?)item.Version)
+        .MaxAsync() ?? 0;
 
-    var project = projects[projectIndex];
-    projects[projectIndex] = project with { Status = "Submitted", UpdatedAt = DateTimeOffset.UtcNow };
+    var submission = new SubmissionItem
+    {
+        Id = ShortId.New("SUB"),
+        ProjectId = id,
+        FileName = request.FileName,
+        FileUrl = request.FileUrl,
+        Version = nextVersion + 1,
+        SubmittedAt = DateTime.UtcNow,
+        SubmittedBy = request.SubmittedBy
+    };
+
+    project.Status = "Submitted";
+    project.UpdatedAt = DateTime.UtcNow;
+    db.Submissions.Add(submission);
+    await db.SaveChangesAsync();
 
     return Results.Accepted($"/projects/{id}/history", new
     {
@@ -88,33 +107,74 @@ app.MapPost("/projects/{id:guid}/submit", (Guid id, SubmitProjectRequest request
     });
 });
 
-app.MapGet("/projects/{id:guid}/history", (Guid id) =>
+app.MapGet("/projects/{id}/history", async (string id, ProjectDbContext db) =>
 {
-    var projectSubmissions = submissions.Where(item => item.ProjectId == id).OrderByDescending(item => item.Version);
+    var projectSubmissions = await db.Submissions
+        .AsNoTracking()
+        .Where(item => item.ProjectId == id)
+        .OrderByDescending(item => item.Version)
+        .ToListAsync();
+
     return Results.Ok(projectSubmissions);
 });
 
-app.MapPatch("/projects/{id:guid}/status", (Guid id, UpdateProjectStatusRequest request) =>
+app.MapPatch("/projects/{id}/status", async (string id, UpdateProjectStatusRequest request, ProjectDbContext db) =>
 {
-    var projectIndex = projects.FindIndex(candidate => candidate.Id == id);
-    if (projectIndex < 0)
+    var project = await db.Projects.FirstOrDefaultAsync(candidate => candidate.Id == id);
+    if (project is null)
     {
         return Results.NotFound();
     }
 
-    projects[projectIndex] = projects[projectIndex] with
-    {
-        Status = request.Status,
-        UpdatedAt = DateTimeOffset.UtcNow
-    };
+    project.Status = request.Status;
+    project.UpdatedAt = DateTime.UtcNow;
+    await db.SaveChangesAsync();
 
-    return Results.Ok(projects[projectIndex]);
+    return Results.Ok(project);
 });
 
 app.Run();
 
-record ProjectItem(Guid Id, string Title, string TeamId, string LecturerId, string Status, string RoundId, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
-record SubmissionItem(Guid Id, Guid ProjectId, string FileName, string FileUrl, int Version, DateTimeOffset SubmittedAt, string SubmittedBy);
+sealed class ProjectDbContext(DbContextOptions<ProjectDbContext> options) : DbContext(options)
+{
+    public DbSet<ProjectItem> Projects => Set<ProjectItem>();
+    public DbSet<SubmissionItem> Submissions => Set<SubmissionItem>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<ProjectItem>().ToTable("Projects").HasKey(project => project.Id);
+        modelBuilder.Entity<SubmissionItem>().ToTable("Submissions").HasKey(submission => submission.Id);
+    }
+}
+
+sealed class ProjectItem
+{
+    public string Id { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string TeamId { get; set; } = "";
+    public string LecturerId { get; set; } = "";
+    public string Status { get; set; } = "Draft";
+    public string? RoundId { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+sealed class SubmissionItem
+{
+    public string Id { get; set; } = "";
+    public string ProjectId { get; set; } = "";
+    public string FileUrl { get; set; } = "";
+    public string FileName { get; set; } = "";
+    public int Version { get; set; }
+    public DateTime SubmittedAt { get; set; }
+    public string SubmittedBy { get; set; } = "";
+}
+
+static class ShortId
+{
+    public static string New(string prefix) => $"{prefix}-{RandomNumberGenerator.GetHexString(8)}";
+}
+
 record CreateProjectRequest(string Title, string TeamId, string LecturerId, string RoundId);
 record SubmitProjectRequest(string FileName, string FileUrl, string SubmittedBy);
 record UpdateProjectStatusRequest(string Status);

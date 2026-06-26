@@ -1,58 +1,97 @@
+using System.Security.Cryptography;
+using Microsoft.EntityFrameworkCore;
+
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
 });
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+builder.Services.AddDbContext<NotificationDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 var app = builder.Build();
 app.UseCors();
+app.UseSwagger();
+app.UseSwaggerUI();
 
-var notifications = new List<NotificationItem>
+app.MapGet("/health", async (NotificationDbContext db) =>
 {
-    new(Guid.NewGuid(), "SE192706", "Review slot assigned", "Your review is scheduled for B3-201.", false, DateTimeOffset.UtcNow.AddHours(-6), "schedule.created"),
-    new(Guid.NewGuid(), "SE192879", "Submission ready", "Team 6 uploaded architecture-v2.pdf.", false, DateTimeOffset.UtcNow.AddHours(-2), "project.submitted"),
-    new(Guid.NewGuid(), "SE192706", "Feedback released", "Council feedback is ready for your project.", true, DateTimeOffset.UtcNow.AddDays(-1), "evaluation.completed")
-};
+    var canConnect = await db.Database.CanConnectAsync();
+    return Results.Ok(new { service = "notification", status = canConnect ? "healthy" : "database-unavailable" });
+});
 
-app.MapGet("/health", () => Results.Ok(new { service = "notification", status = "healthy" }));
-
-app.MapGet("/notifications/{userId}", (string userId) =>
+app.MapGet("/notifications/{userId}", async (string userId, NotificationDbContext db) =>
 {
-    var userNotifications = notifications
-        .Where(item => item.UserId.Equals(userId, StringComparison.OrdinalIgnoreCase))
-        .OrderByDescending(item => item.CreatedAt);
+    var userNotifications = await db.Notifications
+        .AsNoTracking()
+        .Where(item => item.UserId == userId)
+        .OrderByDescending(item => item.CreatedAt)
+        .ToListAsync();
 
     return Results.Ok(userNotifications);
 });
 
-app.MapPut("/notifications/{id:guid}/read", (Guid id) =>
+app.MapPut("/notifications/{id}/read", async (string id, NotificationDbContext db) =>
 {
-    var index = notifications.FindIndex(item => item.Id == id);
-    if (index < 0)
+    var notification = await db.Notifications.FirstOrDefaultAsync(item => item.Id == id);
+    if (notification is null)
     {
         return Results.NotFound();
     }
 
-    notifications[index] = notifications[index] with { IsRead = true };
-    return Results.Ok(notifications[index]);
+    notification.IsRead = true;
+    await db.SaveChangesAsync();
+
+    return Results.Ok(notification);
 });
 
-app.MapPost("/notify", (CreateNotificationRequest request) =>
+app.MapPost("/notify", async (CreateNotificationRequest request, NotificationDbContext db) =>
 {
-    var notification = new NotificationItem(
-        Guid.NewGuid(),
-        request.UserId,
-        request.Title,
-        request.Body,
-        false,
-        DateTimeOffset.UtcNow,
-        request.Type);
+    var notification = new NotificationItem
+    {
+        Id = ShortId.New("NOT"),
+        UserId = request.UserId,
+        Title = request.Title,
+        Body = request.Body,
+        IsRead = false,
+        CreatedAt = DateTime.UtcNow,
+        Type = request.Type
+    };
 
-    notifications.Add(notification);
+    db.Notifications.Add(notification);
+    await db.SaveChangesAsync();
+
     return Results.Accepted($"/notifications/{request.UserId}", notification);
 });
 
 app.Run();
 
-record NotificationItem(Guid Id, string UserId, string Title, string Body, bool IsRead, DateTimeOffset CreatedAt, string Type);
+sealed class NotificationDbContext(DbContextOptions<NotificationDbContext> options) : DbContext(options)
+{
+    public DbSet<NotificationItem> Notifications => Set<NotificationItem>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<NotificationItem>().ToTable("Notifications").HasKey(item => item.Id);
+    }
+}
+
+sealed class NotificationItem
+{
+    public string Id { get; set; } = "";
+    public string UserId { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string Body { get; set; } = "";
+    public bool IsRead { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public string Type { get; set; } = "";
+}
+
+static class ShortId
+{
+    public static string New(string prefix) => $"{prefix}-{RandomNumberGenerator.GetHexString(8)}";
+}
+
 record CreateNotificationRequest(string UserId, string Title, string Body, string Type);

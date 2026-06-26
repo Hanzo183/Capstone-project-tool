@@ -7,9 +7,10 @@ services:
     container_name: sqlserver
     environment:
       - ACCEPT_EULA=Y
-      - SA_PASSWORD=YourStrong@Passw0rd!
+      - MSSQL_SA_PASSWORD=YourStrong@Passw0rd!
+      - MSSQL_PID=Developer
     ports:
-      - "1433:1433"
+      - "11433:1433"
     networks:
       - capstone-network
 
@@ -104,6 +105,8 @@ services:
       context: ./NotificationService
       dockerfile: Dockerfile
     container_name: notification-svc
+    environment:
+      - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=NotificationDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
     ports:
       - "8085:8080"
     depends_on:
