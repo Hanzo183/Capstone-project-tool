@@ -7,7 +7,32 @@ builder.Services.AddCors(options =>
     options.AddDefaultPolicy(policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
 });
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        Scheme = "Bearer",
+        BearerFormat = "JWT",
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Description = "JWT Authorization header using the Bearer scheme. Example: \"Bearer {token}\""
+    });
+    options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    {
+        {
+            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+            {
+                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                {
+                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
 builder.Services.AddDbContext<SchedulingDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
@@ -59,7 +84,23 @@ app.MapGet("/rounds/{id}/schedule", async (string id, SchedulingDbContext db) =>
         .OrderBy(slot => slot.ReviewDate)
         .ToListAsync();
 
-    return Results.Ok(slots.Select(ToSlotResponse));
+    var slotIds = slots.Select(s => s.Id).ToList();
+    var reviewers = await db.SlotReviewers
+        .AsNoTracking()
+        .Where(sr => slotIds.Contains(sr.SlotId))
+        .ToListAsync();
+
+    var response = slots.Select(slot => new ScheduleSlotResponse(
+        slot.Id,
+        slot.RoundId,
+        slot.ProjectId,
+        slot.ReviewDate,
+        slot.Room,
+        slot.DurationMinutes,
+        reviewers.Where(r => r.SlotId == slot.Id).Select(r => r.UserId).ToArray()
+    ));
+
+    return Results.Ok(response);
 });
 
 app.MapPost("/schedule/assign", async (AssignSlotRequest request, SchedulingDbContext db) =>
@@ -71,16 +112,29 @@ app.MapPost("/schedule/assign", async (AssignSlotRequest request, SchedulingDbCo
         ProjectId = request.ProjectId,
         ReviewDate = request.ReviewDate,
         Room = request.Room,
-        CouncilMemberIds = string.Join(',', request.CouncilMemberIds),
+        DurationMinutes = request.DurationMinutes,
         CreatedAt = DateTime.UtcNow
     };
 
     db.ScheduleSlots.Add(slot);
+
+    foreach (var memberId in request.CouncilMemberIds)
+    {
+        db.SlotReviewers.Add(new SlotReviewer { SlotId = slot.Id, UserId = memberId });
+    }
+
     await db.SaveChangesAsync();
 
     return Results.Accepted($"/rounds/{request.RoundId}/schedule", new
     {
-        slot = ToSlotResponse(slot),
+        slot = new ScheduleSlotResponse(
+            slot.Id,
+            slot.RoundId,
+            slot.ProjectId,
+            slot.ReviewDate,
+            slot.Room,
+            slot.DurationMinutes,
+            request.CouncilMemberIds),
         @event = "schedule.created"
     });
 });
@@ -102,7 +156,24 @@ app.MapGet("/schedule/calendar", async (DateOnly? from, DateOnly? to, Scheduling
     }
 
     var slots = await query.OrderBy(slot => slot.ReviewDate).ToListAsync();
-    return Results.Ok(slots.Select(ToSlotResponse));
+    
+    var slotIds = slots.Select(s => s.Id).ToList();
+    var reviewers = await db.SlotReviewers
+        .AsNoTracking()
+        .Where(sr => slotIds.Contains(sr.SlotId))
+        .ToListAsync();
+
+    var response = slots.Select(slot => new ScheduleSlotResponse(
+        slot.Id,
+        slot.RoundId,
+        slot.ProjectId,
+        slot.ReviewDate,
+        slot.Room,
+        slot.DurationMinutes,
+        reviewers.Where(r => r.SlotId == slot.Id).Select(r => r.UserId).ToArray()
+    ));
+
+    return Results.Ok(response);
 });
 
 app.MapPost("/schedule/jobs/deadline-reminders", async (SchedulingDbContext db) =>
@@ -143,24 +214,23 @@ app.MapPost("/schedule/jobs/round-status", async (SchedulingDbContext db) =>
 
 app.Run();
 
-static ScheduleSlotResponse ToSlotResponse(ScheduleSlot slot) =>
-    new(
-        slot.Id,
-        slot.RoundId,
-        slot.ProjectId,
-        slot.ReviewDate,
-        slot.Room,
-        slot.CouncilMemberIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+sealed class SlotReviewer
+{
+    public string SlotId { get; set; } = "";
+    public string UserId { get; set; } = "";
+}
 
 sealed class SchedulingDbContext(DbContextOptions<SchedulingDbContext> options) : DbContext(options)
 {
     public DbSet<ReviewRound> ReviewRounds => Set<ReviewRound>();
     public DbSet<ScheduleSlot> ScheduleSlots => Set<ScheduleSlot>();
+    public DbSet<SlotReviewer> SlotReviewers => Set<SlotReviewer>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<ReviewRound>().ToTable("ReviewRounds").HasKey(round => round.Id);
         modelBuilder.Entity<ScheduleSlot>().ToTable("ScheduleSlots").HasKey(slot => slot.Id);
+        modelBuilder.Entity<SlotReviewer>().ToTable("SlotReviewers").HasKey(sr => new { sr.SlotId, sr.UserId });
     }
 }
 
@@ -182,7 +252,7 @@ sealed class ScheduleSlot
     public string ProjectId { get; set; } = "";
     public DateTime ReviewDate { get; set; }
     public string Room { get; set; } = "";
-    public string CouncilMemberIds { get; set; } = "";
+    public int DurationMinutes { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
@@ -191,6 +261,6 @@ static class ShortId
     public static string New(string prefix) => $"{prefix}-{RandomNumberGenerator.GetHexString(8)}";
 }
 
-record ScheduleSlotResponse(string Id, string RoundId, string ProjectId, DateTime ReviewDate, string Room, string[] CouncilMemberIds);
+record ScheduleSlotResponse(string Id, string RoundId, string ProjectId, DateTime ReviewDate, string Room, int DurationMinutes, string[] CouncilMemberIds);
 record CreateRoundRequest(string Name, DateOnly StartDate, DateOnly EndDate, string CreatedBy);
-record AssignSlotRequest(string RoundId, string ProjectId, DateTime ReviewDate, string Room, string[] CouncilMemberIds);
+record AssignSlotRequest(string RoundId, string ProjectId, DateTime ReviewDate, string Room, int DurationMinutes, string[] CouncilMemberIds);

@@ -98,7 +98,9 @@ GO
 CREATE TABLE Projects (
     Id NVARCHAR(32) NOT NULL PRIMARY KEY,
     Title NVARCHAR(255) NOT NULL,
+    Description NVARCHAR(MAX) NULL,
     TeamId NVARCHAR(100) NOT NULL,
+    TeamLeaderId NVARCHAR(100) NULL,
     LecturerId NVARCHAR(100) NOT NULL,
     Status NVARCHAR(50) NOT NULL DEFAULT 'Draft',
     RoundId NVARCHAR(32) NULL,
@@ -117,11 +119,11 @@ CREATE TABLE Submissions (
     CONSTRAINT FK_Submissions_Projects FOREIGN KEY (ProjectId) REFERENCES Projects(Id)
 );
 
-INSERT INTO Projects (Id, Title, TeamId, LecturerId, Status, RoundId)
+INSERT INTO Projects (Id, Title, Description, TeamId, TeamLeaderId, LecturerId, Status, RoundId)
 VALUES
-('PRJ-1001', N'AI Review Scheduler', 'Team 6', 'SE192879', 'In Review', 'RND-2025A'),
-('PRJ-1002', N'Submission Quality Tracker', 'Team 2', 'SE192879', 'Submitted', 'RND-2025A'),
-('PRJ-1003', N'Council Scoring Portal', 'Team 4', 'SE192737', 'Needs Revision', 'RND-2025A');
+('PRJ-1001', N'AI Review Scheduler', N'A system to automatically schedule capstone reviews using AI.', 'Team 6', 'SE192706', 'SE192879', 'In Review', 'RND-2025A'),
+('PRJ-1002', N'Submission Quality Tracker', N'Track submission guidelines adherence.', 'Team 2', 'SE192706', 'SE192879', 'Submitted', 'RND-2025A'),
+('PRJ-1003', N'Council Scoring Portal', N'A web portal for council scoring.', 'Team 4', 'SE192706', 'SE192737', 'Needs Revision', 'RND-2025A');
 
 INSERT INTO Submissions (Id, ProjectId, FileUrl, FileName, Version, SubmittedBy)
 VALUES
@@ -149,9 +151,16 @@ CREATE TABLE ScheduleSlots (
     ProjectId NVARCHAR(32) NOT NULL,
     ReviewDate DATETIME2 NOT NULL,
     Room NVARCHAR(100) NOT NULL,
-    CouncilMemberIds NVARCHAR(MAX) NOT NULL,
+    DurationMinutes INT NOT NULL DEFAULT 60,
     CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT FK_ScheduleSlots_ReviewRounds FOREIGN KEY (RoundId) REFERENCES ReviewRounds(Id)
+);
+
+CREATE TABLE SlotReviewers (
+    SlotId NVARCHAR(32) NOT NULL,
+    UserId NVARCHAR(100) NOT NULL,
+    CONSTRAINT PK_SlotReviewers PRIMARY KEY (SlotId, UserId),
+    CONSTRAINT FK_SlotReviewers_ScheduleSlots FOREIGN KEY (SlotId) REFERENCES ScheduleSlots(Id) ON DELETE CASCADE
 );
 
 INSERT INTO ReviewRounds (Id, Name, StartDate, EndDate, Status, CreatedBy)
@@ -159,10 +168,17 @@ VALUES
 ('RND-2025A', 'Spring 2025 Round 1', '2025-06-25', '2025-07-05', 'Upcoming', 'SE192737'),
 ('RND-2026A', 'Demo Review Round', '2026-07-01', '2026-07-10', 'Upcoming', 'SE192737');
 
-INSERT INTO ScheduleSlots (Id, RoundId, ProjectId, ReviewDate, Room, CouncilMemberIds)
+INSERT INTO ScheduleSlots (Id, RoundId, ProjectId, ReviewDate, Room, DurationMinutes)
 VALUES
-('SLT-1001', 'RND-2025A', 'PRJ-1001', '2025-06-25 09:00:00', 'B3-201', 'CM001,SE192879'),
-('SLT-1002', 'RND-2025A', 'PRJ-1002', '2025-06-25 10:00:00', 'B3-202', 'CM001,SE192737');
+('SLT-1001', 'RND-2025A', 'PRJ-1001', '2025-06-25 09:00:00', 'B3-201', 60),
+('SLT-1002', 'RND-2025A', 'PRJ-1002', '2025-06-25 10:00:00', 'B3-202', 60);
+
+INSERT INTO SlotReviewers (SlotId, UserId)
+VALUES
+('SLT-1001', 'CM001'),
+('SLT-1001', 'SE192879'),
+('SLT-1002', 'CM001'),
+('SLT-1002', 'SE192737');
 GO
 
 USE EvaluationDb;
@@ -184,6 +200,7 @@ CREATE TABLE Rebuttals (
     StudentId NVARCHAR(100) NOT NULL,
     Content NVARCHAR(MAX) NOT NULL,
     Status NVARCHAR(50) NOT NULL DEFAULT 'Pending',
+    Response NVARCHAR(MAX) NULL,
     SubmittedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     ReviewedAt DATETIME2 NULL,
     CONSTRAINT FK_Rebuttals_Evaluations FOREIGN KEY (EvaluationId) REFERENCES Evaluations(Id)

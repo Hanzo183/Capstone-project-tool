@@ -7,7 +7,32 @@ builder.Services.AddCors(options =>
     options.AddDefaultPolicy(policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
 });
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        Scheme = "Bearer",
+        BearerFormat = "JWT",
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Description = "JWT Authorization header using the Bearer scheme. Example: \"Bearer {token}\""
+    });
+    options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    {
+        {
+            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+            {
+                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                {
+                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
 builder.Services.AddDbContext<EvaluationDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
@@ -116,6 +141,7 @@ app.MapPut("/rebuttals/{id}/status", async (string id, UpdateRebuttalStatusReque
     }
 
     rebuttal.Status = request.Status;
+    rebuttal.Response = request.Response;
     rebuttal.ReviewedAt = DateTime.UtcNow;
     await db.SaveChangesAsync();
 
@@ -170,6 +196,7 @@ sealed class RebuttalItem
     public string StudentId { get; set; } = "";
     public string Content { get; set; } = "";
     public string Status { get; set; } = "Pending";
+    public string? Response { get; set; }
     public DateTime SubmittedAt { get; set; }
     public DateTime? ReviewedAt { get; set; }
 }
@@ -182,4 +209,4 @@ static class ShortId
 record RoundReport(string RoundId, int EvaluationCount, decimal AverageScore, IEnumerable<EvaluationItem> Evaluations);
 record CreateEvaluationRequest(string ProjectId, string RoundId, string EvaluatorId, decimal Score, string? Feedback);
 record CreateRebuttalRequest(string EvaluationId, string StudentId, string Content);
-record UpdateRebuttalStatusRequest(string Status);
+record UpdateRebuttalStatusRequest(string Status, string? Response);
