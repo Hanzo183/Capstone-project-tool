@@ -7,7 +7,32 @@ builder.Services.AddCors(options =>
     options.AddDefaultPolicy(policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
 });
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        Scheme = "Bearer",
+        BearerFormat = "JWT",
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Description = "JWT Authorization header using the Bearer scheme. Example: \"Bearer {token}\""
+    });
+    options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    {
+        {
+            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+            {
+                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                {
+                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
 builder.Services.AddDbContext<ProjectDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
@@ -51,7 +76,9 @@ app.MapPost("/projects", async (CreateProjectRequest request, ProjectDbContext d
     {
         Id = ShortId.New("PRJ"),
         Title = request.Title,
+        Description = request.Description,
         TeamId = request.TeamId,
+        TeamLeaderId = request.TeamLeaderId,
         LecturerId = request.LecturerId,
         Status = "Draft",
         RoundId = request.RoundId,
@@ -151,7 +178,9 @@ sealed class ProjectItem
 {
     public string Id { get; set; } = "";
     public string Title { get; set; } = "";
+    public string? Description { get; set; }
     public string TeamId { get; set; } = "";
+    public string? TeamLeaderId { get; set; }
     public string LecturerId { get; set; } = "";
     public string Status { get; set; } = "Draft";
     public string? RoundId { get; set; }
@@ -175,6 +204,6 @@ static class ShortId
     public static string New(string prefix) => $"{prefix}-{RandomNumberGenerator.GetHexString(8)}";
 }
 
-record CreateProjectRequest(string Title, string TeamId, string LecturerId, string RoundId);
+record CreateProjectRequest(string Title, string? Description, string TeamId, string? TeamLeaderId, string LecturerId, string RoundId);
 record SubmitProjectRequest(string FileName, string FileUrl, string SubmittedBy);
 record UpdateProjectStatusRequest(string Status);
