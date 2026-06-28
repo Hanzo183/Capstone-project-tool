@@ -12,6 +12,8 @@ Password: YourStrong@Passw0rd!
 
 The schema below uses short string IDs such as `PRJ-1001`, `RND-2025A`, and `NOT-1001` instead of `UNIQUEIDENTIFIER` values.
 
+Hangfire creates its own tables automatically in `SchedulingDb` under the `Hangfire` schema when `SchedulingService` starts.
+
 Warning: this is a clean reset script. It drops and recreates the five service databases.
 
 ```sql
@@ -82,6 +84,16 @@ CREATE TABLE RefreshTokens (
     IsRevoked BIT NOT NULL DEFAULT 0,
     CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT FK_RefreshTokens_Users FOREIGN KEY (UserId) REFERENCES Users(Id)
+);
+
+CREATE TABLE PasswordResetTokens (
+    Id NVARCHAR(32) NOT NULL PRIMARY KEY,
+    UserId NVARCHAR(32) NOT NULL,
+    Token NVARCHAR(500) NOT NULL UNIQUE,
+    ExpiresAt DATETIME2 NOT NULL,
+    IsUsed BIT NOT NULL DEFAULT 0,
+    CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT FK_PasswordResetTokens_Users FOREIGN KEY (UserId) REFERENCES Users(Id)
 );
 
 INSERT INTO Users (Id, StudentId, FullName, Email, PasswordHash, Role, IsActive)
@@ -229,12 +241,25 @@ CREATE TABLE Notifications (
     Type NVARCHAR(100) NOT NULL
 );
 
+CREATE TABLE NotificationPreferences (
+    UserId NVARCHAR(100) NOT NULL PRIMARY KEY,
+    EmailEnabled BIT NOT NULL DEFAULT 1,
+    InAppEnabled BIT NOT NULL DEFAULT 1,
+    UpdatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);
+
 INSERT INTO Notifications (Id, UserId, Title, Body, IsRead, Type)
 VALUES
 ('NOT-1001', 'SE192706', N'Review slot assigned', N'Your review is scheduled for B3-201.', 0, 'schedule.created'),
 ('NOT-1002', 'SE192879', N'Submission ready', N'Team 6 uploaded architecture-v2.pdf.', 0, 'project.submitted'),
 ('NOT-1003', 'SE192706', N'Feedback released', N'Council feedback is ready for your project.', 1, 'evaluation.completed'),
 ('NOT-1004', 'CM001', N'Rebuttal submitted', N'A rebuttal is pending council review.', 0, 'rebuttal.submitted');
+
+INSERT INTO NotificationPreferences (UserId, EmailEnabled, InAppEnabled)
+VALUES
+('SE192706', 1, 1),
+('SE192879', 1, 1),
+('CM001', 1, 1);
 GO
 ```
 

@@ -1,5 +1,12 @@
 using System.Security.Cryptography;
+using System.Security.Claims;
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors(options =>
@@ -11,12 +18,10 @@ builder.Services.AddSwaggerGen(options =>
 {
     options.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
     {
-        Name = "Authorization",
-        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
         Scheme = "Bearer",
         BearerFormat = "JWT",
-        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
-        Description = "JWT Authorization header using the Bearer scheme. Example: \"Bearer {token}\""
+        Description = "Paste only the JWT access token. Swagger will add the Bearer prefix automatically."
     });
     options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
     {
@@ -33,13 +38,39 @@ builder.Services.AddSwaggerGen(options =>
         }
     });
 });
+var jwtSecret = builder.Configuration["Jwt:SigningKey"] ?? "capstone-review-tool-development-signing-key";
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = false,
+            ValidateAudience = false,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
+            RoleClaimType = "role",
+            NameClaimType = "name"
+        };
+    });
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("Authenticated", policy => policy.RequireAuthenticatedUser());
+    options.AddPolicy("ReviewStaff", policy => policy.RequireAssertion(context => HasRole(context.User, "Admin", "Lecturer", "CouncilMember")));
+});
 builder.Services.AddDbContext<NotificationDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+builder.Services.AddHostedService<RabbitMqNotificationConsumer>();
 
 var app = builder.Build();
 app.UseCors();
 app.UseSwagger();
 app.UseSwaggerUI();
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapGet("/health", async (NotificationDbContext db) =>
 {
@@ -56,7 +87,7 @@ app.MapGet("/notifications/{userId}", async (string userId, NotificationDbContex
         .ToListAsync();
 
     return Results.Ok(userNotifications);
-});
+}).RequireAuthorization("Authenticated");
 
 app.MapPut("/notifications/{id}/read", async (string id, NotificationDbContext db) =>
 {
@@ -70,7 +101,33 @@ app.MapPut("/notifications/{id}/read", async (string id, NotificationDbContext d
     await db.SaveChangesAsync();
 
     return Results.Ok(notification);
-});
+}).RequireAuthorization("Authenticated");
+
+app.MapGet("/notifications/preferences/{userId}", async (string userId, NotificationDbContext db) =>
+{
+    var preferences = await db.NotificationPreferences
+        .AsNoTracking()
+        .FirstOrDefaultAsync(item => item.UserId == userId);
+
+    return Results.Ok(preferences ?? NotificationPreference.Default(userId));
+}).RequireAuthorization("Authenticated");
+
+app.MapPut("/notifications/preferences/{userId}", async (string userId, UpdateNotificationPreferenceRequest request, NotificationDbContext db) =>
+{
+    var preferences = await db.NotificationPreferences.FirstOrDefaultAsync(item => item.UserId == userId);
+    if (preferences is null)
+    {
+        preferences = new NotificationPreference { UserId = userId };
+        db.NotificationPreferences.Add(preferences);
+    }
+
+    preferences.EmailEnabled = request.EmailEnabled;
+    preferences.InAppEnabled = request.InAppEnabled;
+    preferences.UpdatedAt = DateTime.UtcNow;
+    await db.SaveChangesAsync();
+
+    return Results.Ok(preferences);
+}).RequireAuthorization("Authenticated");
 
 app.MapPost("/notify", async (CreateNotificationRequest request, NotificationDbContext db) =>
 {
@@ -89,17 +146,25 @@ app.MapPost("/notify", async (CreateNotificationRequest request, NotificationDbC
     await db.SaveChangesAsync();
 
     return Results.Accepted($"/notifications/{request.UserId}", notification);
-});
+}).RequireAuthorization("ReviewStaff");
 
 app.Run();
+
+static bool HasRole(ClaimsPrincipal user, params string[] roles)
+{
+    var roleClaims = user.FindAll("role").Concat(user.FindAll(ClaimTypes.Role));
+    return roleClaims.Any(claim => roles.Any(role => string.Equals(claim.Value, role, StringComparison.OrdinalIgnoreCase)));
+}
 
 sealed class NotificationDbContext(DbContextOptions<NotificationDbContext> options) : DbContext(options)
 {
     public DbSet<NotificationItem> Notifications => Set<NotificationItem>();
+    public DbSet<NotificationPreference> NotificationPreferences => Set<NotificationPreference>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<NotificationItem>().ToTable("Notifications").HasKey(item => item.Id);
+        modelBuilder.Entity<NotificationPreference>().ToTable("NotificationPreferences").HasKey(item => item.UserId);
     }
 }
 
@@ -114,9 +179,206 @@ sealed class NotificationItem
     public string Type { get; set; } = "";
 }
 
+sealed class NotificationPreference
+{
+    public string UserId { get; set; } = "";
+    public bool EmailEnabled { get; set; } = true;
+    public bool InAppEnabled { get; set; } = true;
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    public static NotificationPreference Default(string userId) => new() { UserId = userId };
+}
+
+sealed class RabbitMqNotificationConsumer(
+    IConfiguration configuration,
+    IServiceScopeFactory scopeFactory,
+    ILogger<RabbitMqNotificationConsumer> logger) : BackgroundService
+{
+    private readonly string exchangeName = configuration["RabbitMQ:ExchangeName"] ?? "capstone.events";
+    private readonly string queueName = configuration["RabbitMQ:NotificationQueue"] ?? "notification-service";
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                var factory = new ConnectionFactory
+                {
+                    HostName = configuration["RabbitMQ:HostName"] ?? "localhost",
+                    Port = int.TryParse(configuration["RabbitMQ:Port"], out var port) ? port : 5672,
+                    UserName = configuration["RabbitMQ:UserName"] ?? "guest",
+                    Password = configuration["RabbitMQ:Password"] ?? "guest",
+                    DispatchConsumersAsync = true
+                };
+
+                using var connection = factory.CreateConnection();
+                using var channel = connection.CreateModel();
+                channel.ExchangeDeclare(exchangeName, ExchangeType.Topic, durable: true, autoDelete: false);
+                channel.QueueDeclare(queueName, durable: true, exclusive: false, autoDelete: false);
+
+                foreach (var routingKey in NotificationFactory.SupportedEvents)
+                {
+                    channel.QueueBind(queueName, exchangeName, routingKey);
+                }
+
+                var consumer = new AsyncEventingBasicConsumer(channel);
+                consumer.Received += async (_, args) =>
+                {
+                    try
+                    {
+                        var json = Encoding.UTF8.GetString(args.Body.ToArray());
+                        var integrationEvent = JsonSerializer.Deserialize<IntegrationEventEnvelope>(json, new JsonSerializerOptions
+                        {
+                            PropertyNameCaseInsensitive = true
+                        });
+                        if (integrationEvent is null)
+                        {
+                            channel.BasicAck(args.DeliveryTag, multiple: false);
+                            return;
+                        }
+
+                        await PersistNotificationsAsync(integrationEvent, stoppingToken);
+                        channel.BasicAck(args.DeliveryTag, multiple: false);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Failed to process notification integration event.");
+                        channel.BasicNack(args.DeliveryTag, multiple: false, requeue: true);
+                    }
+                };
+
+                channel.BasicConsume(queueName, autoAck: false, consumer);
+                logger.LogInformation("NotificationService consuming RabbitMQ queue {QueueName}.", queueName);
+                await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "RabbitMQ notification consumer disconnected. Retrying soon.");
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            }
+        }
+    }
+
+    private async Task PersistNotificationsAsync(IntegrationEventEnvelope integrationEvent, CancellationToken cancellationToken)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<NotificationDbContext>();
+        var notifications = NotificationFactory.Create(integrationEvent).ToList();
+        if (notifications.Count == 0)
+        {
+            return;
+        }
+
+        var userIds = notifications.Select(item => item.UserId).Distinct().ToList();
+        var preferences = await db.NotificationPreferences
+            .Where(item => userIds.Contains(item.UserId))
+            .ToDictionaryAsync(item => item.UserId, cancellationToken);
+
+        foreach (var notification in notifications)
+        {
+            var preference = preferences.GetValueOrDefault(notification.UserId) ?? NotificationPreference.Default(notification.UserId);
+            if (!preference.InAppEnabled)
+            {
+                continue;
+            }
+
+            db.Notifications.Add(notification);
+            if (preference.EmailEnabled)
+            {
+                logger.LogInformation("Email notification queued for {UserId}: {Title}", notification.UserId, notification.Title);
+            }
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+    }
+}
+
+static class NotificationFactory
+{
+    public static readonly string[] SupportedEvents =
+    [
+        "project.submitted",
+        "schedule.created",
+        "evaluation.completed",
+        "deadline.reminder",
+        "user.registered",
+        "rebuttal.submitted"
+    ];
+
+    public static IEnumerable<NotificationItem> Create(IntegrationEventEnvelope integrationEvent)
+    {
+        var payload = integrationEvent.Payload;
+        return integrationEvent.Name switch
+        {
+            "user.registered" => CreateOne(payload, "UserId", "Welcome to Capstone Review Tool", "Your account has been created.", integrationEvent.Name),
+            "project.submitted" => CreateOne(payload, "LecturerId", "New project submission", $"{Read(payload, "Title", "A project")} uploaded {Read(payload, "FileName", "a file")}.", integrationEvent.Name),
+            "schedule.created" => CreateScheduleNotifications(payload, integrationEvent.Name),
+            "evaluation.completed" => CreateOne(payload, "StudentId", "Evaluation completed", $"Score released for project {Read(payload, "ProjectId", "unknown")}.", integrationEvent.Name),
+            "deadline.reminder" => CreateOne(payload, "ProjectId", "Review deadline reminder", $"Review slot starts at {Read(payload, "ReviewDate", "the scheduled time")}.", integrationEvent.Name),
+            "rebuttal.submitted" => CreateOne(payload, "EvaluatorId", "Rebuttal pending review", $"A rebuttal was submitted for project {Read(payload, "ProjectId", "unknown")}.", integrationEvent.Name),
+            _ => []
+        };
+    }
+
+    private static IEnumerable<NotificationItem> CreateScheduleNotifications(JsonElement payload, string type)
+    {
+        if (!payload.TryGetProperty("CouncilMemberIds", out var members) || members.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return members
+            .EnumerateArray()
+            .Select(member => member.GetString())
+            .Where(userId => !string.IsNullOrWhiteSpace(userId))
+            .Select(userId => New(userId!, "Review slot assigned", $"Project {Read(payload, "ProjectId", "unknown")} is scheduled in room {Read(payload, "Room", "TBA")}.", type));
+    }
+
+    private static IEnumerable<NotificationItem> CreateOne(JsonElement payload, string userProperty, string title, string body, string type)
+    {
+        var userId = Read(payload, userProperty, "");
+        return string.IsNullOrWhiteSpace(userId) ? [] : [New(userId, title, body, type)];
+    }
+
+    private static NotificationItem New(string userId, string title, string body, string type) => new()
+    {
+        Id = ShortId.New("NOT"),
+        UserId = userId,
+        Title = title,
+        Body = body,
+        IsRead = false,
+        CreatedAt = DateTime.UtcNow,
+        Type = type
+    };
+
+    private static string Read(JsonElement payload, string property, string fallback)
+    {
+        if (!payload.TryGetProperty(property, out var value))
+        {
+            return fallback;
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString() ?? fallback,
+            JsonValueKind.Number => value.ToString(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => fallback
+        };
+    }
+}
+
 static class ShortId
 {
     public static string New(string prefix) => $"{prefix}-{RandomNumberGenerator.GetHexString(8)}";
 }
 
 record CreateNotificationRequest(string UserId, string Title, string Body, string Type);
+record UpdateNotificationPreferenceRequest(bool EmailEnabled, bool InAppEnabled);
+record IntegrationEventEnvelope(string Name, DateTime OccurredAt, JsonElement Payload);

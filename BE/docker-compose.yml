@@ -31,6 +31,9 @@ services:
     container_name: api-gateway
     ports:
       - "5000:8080"
+    environment:
+      - Jwt__SigningKey=capstone-review-tool-development-signing-key
+      - RabbitMQ__HostName=rabbitmq
     depends_on:
       - identity-svc
       - project-svc
@@ -48,6 +51,8 @@ services:
     container_name: identity-svc
     environment:
       - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=IdentityDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
+      - Jwt__SigningKey=capstone-review-tool-development-signing-key
+      - RabbitMQ__HostName=rabbitmq
     ports:
       - "8081:8080" # Exposed for direct debugging if needed, but normally routed through YARP
     depends_on:
@@ -62,8 +67,12 @@ services:
     container_name: project-svc
     environment:
       - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=ProjectDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
+      - Jwt__SigningKey=capstone-review-tool-development-signing-key
+      - RabbitMQ__HostName=rabbitmq
     ports:
       - "8082:8080"
+    volumes:
+      - project-uploads:/app/uploads
     depends_on:
       - sqlserver
       - rabbitmq
@@ -77,6 +86,8 @@ services:
     container_name: scheduling-svc
     environment:
       - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=SchedulingDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
+      - Jwt__SigningKey=capstone-review-tool-development-signing-key
+      - RabbitMQ__HostName=rabbitmq
     ports:
       - "8083:8080"
     depends_on:
@@ -92,6 +103,8 @@ services:
     container_name: evaluation-svc
     environment:
       - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=EvaluationDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
+      - Jwt__SigningKey=capstone-review-tool-development-signing-key
+      - RabbitMQ__HostName=rabbitmq
     ports:
       - "8084:8080"
     depends_on:
@@ -107,6 +120,9 @@ services:
     container_name: notification-svc
     environment:
       - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=NotificationDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
+      - Jwt__SigningKey=capstone-review-tool-development-signing-key
+      - RabbitMQ__HostName=rabbitmq
+      - RabbitMQ__NotificationQueue=notification-service
     ports:
       - "8085:8080"
     depends_on:
@@ -117,3 +133,6 @@ services:
 networks:
   capstone-network:
     driver: bridge
+
+volumes:
+  project-uploads:
