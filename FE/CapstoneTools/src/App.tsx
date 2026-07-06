@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import React from 'react';
 import Layout from './components/Layout';
 import Login from './pages/Login';
+import Register from './pages/Register';
 import StudentDashboard from './pages/StudentDashboard';
 import ReviewCalendar from './pages/ReviewCalendar';
 import AdminDashboard from './pages/AdminDashboard';
@@ -65,6 +66,7 @@ function App() {
             <Routes>
                 {/* Public Route */}
                 <Route path="/login" element={<Login />} />
+                <Route path="/register" element={<Register />} />
 
                 {/* Protected Routes Wrapper */}
                 <Route path="/" element={<Layout />}>

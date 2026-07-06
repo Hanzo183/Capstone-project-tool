@@ -703,3 +703,29 @@
         display: none !important;
     }
 }
+
+.forgot-password-link {
+    background: none;
+    border: none;
+    color: #667eea;
+    font-size: 0.85rem;
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+    .forgot-password-link:hover {
+        color: #5a67d8;
+    }
+
+.forgot-password-link {
+    background: none;
+    border: none;
+    color: #667eea;
+    font-size: 0.85rem;
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+    .forgot-password-link:hover {
+        color: #5a67d8;
+    }

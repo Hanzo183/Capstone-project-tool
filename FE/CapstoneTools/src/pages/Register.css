@@ -1,0 +1,311 @@
+/* src/pages/Register.css */
+
+.register-page-wrapper {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    padding: 1rem;
+}
+
+.register-glass-card {
+    background: rgba(255, 255, 255, 0.06);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+    border-radius: var(--radius-2xl);
+    padding: 2.5rem;
+    width: 100%;
+    max-width: 420px;
+    color: white;
+    text-align: center;
+    transition: all var(--transition-smooth);
+    position: relative;
+    z-index: 1;
+    animation: cardEntrance 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.register-glass-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.2), transparent);
+    border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
+}
+
+.register-glass-card::after {
+    content: '';
+    position: absolute;
+    top: -2px;
+    left: -2px;
+    right: -2px;
+    bottom: -2px;
+    background: linear-gradient(45deg, transparent 30%, rgba(99, 102, 241, 0.1) 50%, transparent 70%);
+    border-radius: var(--radius-2xl);
+    z-index: -1;
+    animation: borderGlow 3s ease-in-out infinite;
+}
+
+.register-glass-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 25px 60px rgba(99, 102, 241, 0.18), 0 0 40px rgba(99, 102, 241, 0.05);
+}
+
+@keyframes cardEntrance {
+    from {
+        opacity: 0;
+        transform: translateY(30px) scale(0.95);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@keyframes borderGlow {
+    0%, 100% {
+        opacity: 0.5;
+    }
+
+    50% {
+        opacity: 1;
+    }
+}
+
+.register-header {
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+.register-title {
+    font-size: clamp(1.5rem, 4vw, 2rem);
+    font-weight: 800;
+    margin: 0 0 0.5rem 0;
+    letter-spacing: -0.025em;
+    background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 50%, #818cf8 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: titleShine 3s ease-in-out infinite;
+}
+
+@keyframes titleShine {
+    0%, 100% {
+        filter: brightness(1);
+    }
+
+    50% {
+        filter: brightness(1.2);
+    }
+}
+
+.register-subtitle {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    margin: 0 0 2rem 0;
+    font-weight: 400;
+    opacity: 0.9;
+}
+
+.register-form {
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    animation: formElements 0.8s ease backwards 0.2s;
+}
+
+@keyframes formElements {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+
+.input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+    .input-group label {
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: black;
+    }
+
+    .input-group input,
+    .input-group select {
+        padding: 0.75rem 1rem;
+        border: 2px solid #e2e8f0;
+        border-radius: 8px;
+        font-size: 1rem;
+        transition: border-color 0.2s ease;
+        outline: none;
+        background: transparent;
+    }
+
+        .input-group input:focus,
+        .input-group select:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .input-group input:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+/* Password Strength Indicator */
+.password-strength-container {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.25rem;
+}
+
+.password-strength-bar {
+    flex: 1;
+    height: 4px;
+    background: #e5e7eb;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.password-strength-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+
+.password-strength-label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    min-width: 40px;
+}
+
+.password-hint {
+    font-size: 0.75rem;
+    color: black;
+}
+
+.password-error {
+    font-size: 0.75rem;
+    color: #ef4444;
+}
+
+.password-match {
+    font-size: 0.75rem;
+    color: #22c55e;
+}
+
+/* Message Styles */
+.register-error-msg {
+    background: #fee2e2;
+    color: #dc2626;
+    padding: 0.75rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    text-align: center;
+    border: 1px solid #fecaca;
+}
+
+.register-success-msg {
+    background: #dcfce7;
+    color: #16a34a;
+    padding: 0.75rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    text-align: center;
+    border: 1px solid #bbf7d0;
+}
+
+/* Submit Button */
+.register-submit-btn {
+    padding: 0.75rem;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    margin-top: 0.5rem;
+}
+
+    .register-submit-btn:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+    }
+
+    .register-submit-btn:disabled {
+        opacity: 0.7;
+        cursor: not-allowed;
+    }
+
+/* Footer */
+.register-footer {
+    text-align: center;
+    margin-top: 0.5rem;
+    color: black;
+    font-size: 0.9rem;
+}
+
+.register-login-link {
+    color: #667eea;
+    text-decoration: none;
+    font-weight: 600;
+    transition: color 0.2s ease;
+}
+
+    .register-login-link:hover {
+        color: #5a67d8;
+        text-decoration: underline;
+    }
+
+/* Scrollbar Styling */
+.register-glass-card::-webkit-scrollbar {
+    width: 6px;
+}
+
+.register-glass-card::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.register-glass-card::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 3px;
+}
+
+    .register-glass-card::-webkit-scrollbar-thumb:hover {
+        background: #94a3b8;
+    }
+
+/* Responsive */
+@media (max-width: 480px) {
+    .register-glass-card {
+        padding: 1.5rem;
+        max-width: 100%;
+    }
+
+    .register-title {
+        font-size: 1.5rem;
+    }
+
+    .input-group input,
+    .input-group select {
+        padding: 0.6rem 0.75rem;
+    }
+}
