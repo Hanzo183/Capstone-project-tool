@@ -9,6 +9,7 @@ import ReviewCalendar from './pages/ReviewCalendar';
 import AdminDashboard from './pages/AdminDashboard';
 import LecturerDashboard from './pages/LecturerDashboard';
 import SubmissionsPage from './pages/SubmissionsPage';
+import EvaluationPage from './pages/EvaluationPage';
 
 // Client-side session and role status helper
 const getLocalUser = () => {
@@ -81,6 +82,11 @@ function App() {
                             </ProtectedRoute>
                         }
                     />
+                    <Route path="evaluation"
+                        element={
+                            <ProtectedRoute allowedRoles={['Student', 'Admin']}>
+                                <EvaluationPage />
+                        </ProtectedRoute>} />
                     <Route
                         path="dashboard/student"
                         element={

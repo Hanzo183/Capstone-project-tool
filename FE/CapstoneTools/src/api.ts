@@ -25,7 +25,6 @@ export const api = {
             localStorage.setItem('token', data.accessToken);
             localStorage.setItem('refreshToken', data.refreshToken || '');
 
-            // Decode token to get user info
             try {
                 const payload = JSON.parse(atob(data.accessToken.split('.')[1]));
                 localStorage.setItem('userId', payload.nameid || payload.sub || '');
@@ -143,16 +142,33 @@ export const api = {
     // Get all users (Admin only)
     getUsers: async () => {
         const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE_URL}/users`, {
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            }
-        });
-        if (!response.ok) {
-            throw new Error('Failed to fetch users');
+        if (!token) {
+            throw new Error('No authentication token found');
         }
-        return response.json();
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/users`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (!response.ok) {
+                if (response.status === 401) {
+                    throw new Error('Unauthorized - Please login again');
+                }
+                if (response.status === 403) {
+                    throw new Error('Forbidden - Admin access required');
+                }
+                throw new Error(`Failed to fetch users: ${response.status}`);
+            }
+
+            return response.json();
+        } catch (err) {
+            console.error('getUsers error:', err);
+            throw err;
+        }
     },
 
     // Get user by ID
@@ -182,7 +198,8 @@ export const api = {
             body: JSON.stringify({ role })
         });
         if (!response.ok) {
-            throw new Error('Failed to update user role');
+            const error = await response.json();
+            throw new Error(error.message || 'Failed to update user role');
         }
         return response.json();
     },
@@ -199,7 +216,8 @@ export const api = {
             body: JSON.stringify({ isActive })
         });
         if (!response.ok) {
-            throw new Error('Failed to update user status');
+            const error = await response.json();
+            throw new Error(error.message || 'Failed to update user status');
         }
         return response.json();
     },
@@ -349,16 +367,25 @@ export const api = {
     // Get all review rounds
     getReviewRounds: async () => {
         const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE_URL}/rounds`, {
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
+        try {
+            const response = await fetch(`${API_BASE_URL}/rounds`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            if (!response.ok) {
+                if (response.status === 404) {
+                    console.warn('Rounds endpoint not found, returning empty array');
+                    return [];
+                }
+                throw new Error('Failed to fetch review rounds');
             }
-        });
-        if (!response.ok) {
-            throw new Error('Failed to fetch review rounds');
+            return response.json();
+        } catch (err) {
+            console.error('getReviewRounds error:', err);
+            return [];
         }
-        return response.json();
     },
 
     // Get single review round
@@ -393,7 +420,8 @@ export const api = {
             body: JSON.stringify(roundData)
         });
         if (!response.ok) {
-            throw new Error('Failed to create review round');
+            const error = await response.json();
+            throw new Error(error.message || 'Failed to create review round');
         }
         return response.json();
     },
@@ -531,20 +559,66 @@ export const api = {
     },
 
     // Respond to rebuttal (Council)
-    respondToRebuttal: async (rebuttalId: string, response: string) => {
+    respondToRebuttal: async (rebuttalId: string, responseText: string) => {
         const token = localStorage.getItem('token');
-        const responseData = await fetch(`${API_BASE_URL}/rebuttals/${rebuttalId}/respond`, {
+        const response = await fetch(`${API_BASE_URL}/rebuttals/${rebuttalId}/respond`, {
             method: 'PUT',
             headers: {
                 'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ response })
+            body: JSON.stringify({ response: responseText })
         });
-        if (!responseData.ok) {
+        if (!response.ok) {
             throw new Error('Failed to respond to rebuttal');
         }
-        return responseData.json();
+        return response.json();
+    },
+
+    // Update rebuttal status
+    updateRebuttalStatus: async (rebuttalId: string, status: string) => {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/rebuttals/${rebuttalId}/status`, {
+            method: 'PUT',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ status })
+        });
+        if (!response.ok) {
+            throw new Error('Failed to update rebuttal status');
+        }
+        return response.json();
+    },
+
+    // Get reports for a round
+    getReports: async (roundId: string) => {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/reports/${roundId}`, {
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        if (!response.ok) {
+            throw new Error('Failed to fetch reports');
+        }
+        return response.json();
+    },
+
+    // Download report as PDF
+    downloadReportPdf: async (roundId: string) => {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/reports/${roundId}/pdf`, {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+        if (!response.ok) {
+            throw new Error('Failed to download report');
+        }
+        return response.blob();
     },
 
     // ============================================

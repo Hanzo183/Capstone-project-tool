@@ -1,0 +1,294 @@
+/* src/pages/EvaluationPage.css */
+
+.evaluation-page {
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.evaluation-header {
+    margin-bottom: 2rem;
+}
+
+    .evaluation-header h2 {
+        font-size: 2rem;
+        color: #2d3748;
+        margin-bottom: 0.5rem;
+    }
+
+    .evaluation-header p {
+        color: #6b7280;
+    }
+
+.error-banner {
+    background: #fee2e2;
+    color: #dc2626;
+    padding: 1rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+}
+
+.loading-state {
+    text-align: center;
+    padding: 3rem;
+    color: #6b7280;
+}
+
+.evaluation-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 1.5rem;
+}
+
+.evaluations-section {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+    .evaluations-section h3 {
+        font-size: 1.2rem;
+        color: #2d3748;
+        margin-bottom: 0.5rem;
+    }
+
+.empty-state {
+    text-align: center;
+    padding: 2rem;
+    background: #f8fafc;
+    border-radius: 8px;
+    color: #6b7280;
+}
+
+.evaluation-card {
+    background: white;
+    border-radius: 12px;
+    padding: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    border: 1px solid #e5e7eb;
+}
+
+.evaluation-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.evaluator-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.evaluator-name {
+    font-weight: 600;
+    color: #2d3748;
+}
+
+.evaluation-date {
+    font-size: 0.8rem;
+    color: #6b7280;
+}
+
+.score-display {
+    display: flex;
+    align-items: baseline;
+}
+
+.score-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #3b82f6;
+}
+
+.score-max {
+    font-size: 1rem;
+    color: #6b7280;
+    margin-left: 0.2rem;
+}
+
+.feedback-section {
+    background: #f8fafc;
+    padding: 1rem;
+    border-radius: 8px;
+    margin: 1rem 0;
+}
+
+.feedback-text {
+    margin: 0;
+    color: #374151;
+    font-style: italic;
+}
+
+.rebuttal-section {
+    background: #f0fdf4;
+    padding: 1rem;
+    border-radius: 8px;
+    margin-top: 1rem;
+    border-left: 3px solid #22c55e;
+}
+
+.rebuttal-content strong {
+    color: #2d3748;
+}
+
+.rebuttal-content p {
+    margin: 0.5rem 0;
+    color: #374151;
+}
+
+.rebuttal-status {
+    display: inline-block;
+    padding: 0.15rem 0.6rem;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+    .rebuttal-status.pending {
+        background: #fef3c7;
+        color: #d97706;
+    }
+
+    .rebuttal-status.approved {
+        background: #dcfce7;
+        color: #16a34a;
+    }
+
+    .rebuttal-status.rejected {
+        background: #fee2e2;
+        color: #dc2626;
+    }
+
+.rebuttal-response {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid #e5e7eb;
+}
+
+.btn-rebuttal {
+    background: #3b82f6;
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: background 0.2s;
+}
+
+    .btn-rebuttal:hover {
+        background: #2563eb;
+    }
+
+/* Modal */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background: white;
+    border-radius: 12px;
+    padding: 2rem;
+    max-width: 500px;
+    width: 100%;
+}
+
+    .modal-content h3 {
+        margin-bottom: 0.5rem;
+    }
+
+    .modal-content p {
+        color: #6b7280;
+        margin-bottom: 1rem;
+    }
+
+    .modal-content textarea {
+        width: 100%;
+        padding: 0.75rem;
+        border: 2px solid #e2e8f0;
+        border-radius: 8px;
+        resize: vertical;
+        font-family: inherit;
+    }
+
+.modal-actions {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.btn-cancel {
+    padding: 0.5rem 1.5rem;
+    background: #e5e7eb;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.btn-submit {
+    padding: 0.5rem 1.5rem;
+    background: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+    .btn-submit:hover {
+        background: #2563eb;
+    }
+
+/* Summary */
+.summary-section {
+    background: white;
+    border-radius: 12px;
+    padding: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    border: 1px solid #e5e7eb;
+    height: fit-content;
+}
+
+    .summary-section h3 {
+        margin-bottom: 1rem;
+        color: #2d3748;
+    }
+
+.stats-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.stat-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid #f3f4f6;
+}
+
+.stat-label {
+    color: #6b7280;
+}
+
+.stat-value {
+    font-weight: 600;
+    color: #2d3748;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .evaluation-grid {
+        grid-template-columns: 1fr;
+    }
+}
