@@ -1,4 +1,5 @@
 // src/components/Layout.tsx
+import { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import './Layout.css';
 
@@ -6,6 +7,20 @@ export default function Layout() {
     const navigate = useNavigate();
     const role = localStorage.getItem('role');
     const fullName = localStorage.getItem('fullName') || 'User';
+
+    const [unreadCount, setUnreadCount] = useState<number>(() => {
+        const val = localStorage.getItem('unreadNotificationsCount');
+        return val ? parseInt(val) : 3;
+    });
+
+    useEffect(() => {
+        const handleNotifUpdate = () => {
+            const val = localStorage.getItem('unreadNotificationsCount');
+            setUnreadCount(val ? parseInt(val) : 0);
+        };
+        window.addEventListener('notificationsUpdated', handleNotifUpdate);
+        return () => window.removeEventListener('notificationsUpdated', handleNotifUpdate);
+    }, []);
 
     const handleLogout = () => {
         localStorage.removeItem('token');
@@ -18,9 +33,10 @@ export default function Layout() {
 
     // Dynamically resolve target route nodes based on context roles
     const getDashboardPath = () => {
-        if (role === 'Admin') return '/admin';
-        if (role === 'Lecturer') return '/lecturer';
-        return '/student';
+        if (role === 'Admin') return '/dashboard/admin';
+        if (role === 'Lecturer') return '/dashboard/lecturer';
+        if (role === 'CouncilMember') return '/dashboard/council';
+        return '/dashboard/student';
     };
 
     return (
@@ -96,7 +112,7 @@ export default function Layout() {
                         className={({ isActive }) => `nav-anchor-link ${isActive ? 'active-node' : ''}`}
                     >
                         <span className="link-icon">🔔</span> Notifications
-                        <span className="notification-badge">3</span>
+                        {unreadCount > 0 && <span className="notification-badge">{unreadCount}</span>}
                     </NavLink>
                 </nav>
 
