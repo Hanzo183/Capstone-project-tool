@@ -10,6 +10,8 @@ import AdminDashboard from './pages/AdminDashboard';
 import LecturerDashboard from './pages/LecturerDashboard';
 import SubmissionsPage from './pages/SubmissionsPage';
 import EvaluationPage from './pages/EvaluationPage';
+import CouncilDashboard from './pages/CouncilDashboard';
+import NotificationsPage from './pages/NotificationsPage';
 
 // Client-side session and role status helper
 const getLocalUser = () => {
@@ -34,7 +36,7 @@ function RootRedirect() {
         case 'Lecturer':
             return <Navigate to="/dashboard/lecturer" replace />;
         case 'CouncilMember':
-            return <Navigate to="/calendar" replace />;
+            return <Navigate to="/dashboard/council" replace />;
         default:
             return <Navigate to="/login" replace />;
     }
@@ -110,6 +112,24 @@ function App() {
                         element={
                             <ProtectedRoute allowedRoles={['Admin', 'Lecturer', 'CouncilMember', 'Student']}>
                                 <ReviewCalendar />
+                            </ProtectedRoute>
+                        }
+                    />
+
+                    <Route
+                        path="dashboard/council"
+                        element={
+                            <ProtectedRoute allowedRoles={['CouncilMember']}>
+                                <CouncilDashboard />
+                            </ProtectedRoute>
+                        }
+                    />
+
+                    <Route
+                        path="notifications"
+                        element={
+                            <ProtectedRoute allowedRoles={['Student', 'Admin', 'Lecturer', 'CouncilMember']}>
+                                <NotificationsPage />
                             </ProtectedRoute>
                         }
                     />
