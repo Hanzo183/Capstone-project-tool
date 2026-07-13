@@ -78,9 +78,7 @@ export default function SubmissionsPage() {
                     }
                 } else {
                     // For Student: get their project
-                    const studentProject = projectsData.find(
-                        (p: Project) => p.teamLeaderId === userId
-                    );
+                    const studentProject = projectsData[0];
                     if (studentProject) {
                         setSelectedProjectId(studentProject.id);
                         setProjectId(studentProject.id);
@@ -132,6 +130,14 @@ export default function SubmissionsPage() {
     const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file || !projectId) return;
+
+        const allowedExtensions = ['.pdf', '.doc', '.docx', '.zip'];
+        const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
+        if (!allowedExtensions.includes(extension)) {
+            setErrorMsg('Only PDF, Word, or ZIP files are allowed.');
+            event.target.value = '';
+            return;
+        }
 
         setIsUploading(true);
         setErrorMsg('');
@@ -202,6 +208,12 @@ export default function SubmissionsPage() {
             return;
         }
 
+        const numericScore = parseFloat(gradeScore);
+        if (Number.isNaN(numericScore) || numericScore < 0 || numericScore > 10) {
+            alert('Score must be between 0 and 10.');
+            return;
+        }
+
         setIsSubmittingEval(true);
 
         try {
@@ -213,8 +225,9 @@ export default function SubmissionsPage() {
                 projectId: selectedProjectId,
                 roundId: roundId,
                 evaluatorId: userId,
-                score: parseFloat(gradeScore),
-                feedback: evaluationFeedback
+                score: numericScore,
+                feedback: evaluationFeedback,
+                studentId: project?.teamLeaderId
             });
 
             alert('✅ Evaluation submitted successfully!');

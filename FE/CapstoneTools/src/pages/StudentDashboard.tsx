@@ -35,9 +35,11 @@ export default function StudentDashboard() {
         const loadDashboardData = async () => {
             try {
                 const projectData = await api.getProjects();
+                const userProjects = Array.isArray(projectData) ? projectData : [];
+                const visibleProjects = userProjects;
 
-                if (projectData && projectData.length > 0) {
-                    const activeRes = projectData[0];
+                if (visibleProjects.length > 0) {
+                    const activeRes = visibleProjects[0];
                     const projectId = activeRes.id;
 
                     setCurrentProject({
@@ -135,7 +137,7 @@ export default function StudentDashboard() {
         room: 'Alpha 105',
         time: '2026-06-25 10:00 AM',
         council: ['Dr. Nguyen Van A', 'Dr. Tran Thi B', 'Mr. Le Van C'],
-        type: 'Presentation'
+        type: 'Initial Review'
     };
 
     // ✅ FIXED: Download function for dashboard

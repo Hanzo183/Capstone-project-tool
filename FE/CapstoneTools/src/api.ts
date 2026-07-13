@@ -264,6 +264,7 @@ export const api = {
         teamLeaderId?: string;
         lecturerId: string;
         roundId?: string;
+        memberStudentIds?: string[];
         status?: string;
     }) => {
         const token = localStorage.getItem('token');
@@ -280,6 +281,53 @@ export const api = {
             throw new Error(error.message || 'Failed to create project');
         }
         return response.json();
+    },
+
+    getProjectMembers: async (projectId: string) => {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/projects/${projectId}/members`, {
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        if (!response.ok) {
+            throw new Error('Failed to fetch project members');
+        }
+        return response.json();
+    },
+
+    assignProjectMember: async (projectId: string, studentId: string) => {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/projects/${projectId}/members`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ studentId })
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.message || 'Failed to assign project member');
+        }
+        return response.json();
+    },
+
+    removeProjectMember: async (projectId: string, studentId: string) => {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/projects/${projectId}/members/${studentId}`, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.message || 'Failed to remove project member');
+        }
+        return { success: true };
     },
 
     // Submit project for review
@@ -490,6 +538,7 @@ export const api = {
         room: string;
         durationMinutes?: number;
         reviewerIds?: string[];
+        councilMemberIds?: string[];
     }) => {
         const token = localStorage.getItem('token');
         const response = await fetch(`${API_BASE_URL}/schedule/assign`, {
@@ -498,7 +547,10 @@ export const api = {
                 'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(slotData)
+            body: JSON.stringify({
+                ...slotData,
+                councilMemberIds: slotData.councilMemberIds ?? slotData.reviewerIds ?? []
+            })
         });
         if (!response.ok) {
             const error = await response.json();
@@ -558,6 +610,20 @@ export const api = {
         return response.json();
     },
 
+    getAllEvaluations: async () => {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/evaluations`, {
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        if (!response.ok) {
+            throw new Error('Failed to fetch evaluations');
+        }
+        return response.json();
+    },
+
     // Create evaluation (Lecturer/Council)
     createEvaluation: async (evalData: {
         projectId: string;
@@ -565,6 +631,7 @@ export const api = {
         evaluatorId: string;
         score: number;
         feedback: string;
+        studentId?: string;
     }) => {
         const token = localStorage.getItem('token');
         const response = await fetch(`${API_BASE_URL}/evaluations`, {
@@ -596,6 +663,20 @@ export const api = {
         return response.json();
     },
 
+    getPendingRebuttals: async () => {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/rebuttals?status=Pending`, {
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        if (!response.ok) {
+            throw new Error('Failed to fetch pending rebuttals');
+        }
+        return response.json();
+    },
+
     // Create rebuttal (Student)
     createRebuttal: async (rebuttalData: {
         evaluationId: string;
@@ -614,7 +695,8 @@ export const api = {
         if (!response.ok) {
             throw new Error('Failed to create rebuttal');
         }
-        return response.json();
+        const data = await response.json();
+        return data.rebuttal ?? data;
     },
 
     // Respond to rebuttal (Council)

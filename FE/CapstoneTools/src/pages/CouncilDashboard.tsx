@@ -16,6 +16,16 @@ interface Rebuttal {
     submittedAt: string;
 }
 
+interface EvaluationRecord {
+    id: string;
+    projectId: string;
+    roundId: string;
+    evaluatorId: string;
+    score: number;
+    feedback?: string;
+    submittedAt: string;
+}
+
 export default function CouncilDashboard() {
     const [assignedProjects, setAssignedProjects] = useState<Project[]>([]);
     const [evaluationsTodo, setEvaluationsTodo] = useState<Project[]>([]);
@@ -31,6 +41,7 @@ export default function CouncilDashboard() {
     // Rebuttal Response Form State
     const [selectedRebuttal, setSelectedRebuttal] = useState<Rebuttal | null>(null);
     const [rebuttalResponse, setRebuttalResponse] = useState<string>('');
+    const [rebuttalDecision, setRebuttalDecision] = useState<'Approved' | 'Rejected'>('Approved');
     const [submittingRebuttal, setSubmittingRebuttal] = useState(false);
 
     const [isLoading, setIsLoading] = useState(true);
@@ -96,21 +107,35 @@ export default function CouncilDashboard() {
 
             setUpcomingSlots(slotsData.filter((s: any) => s.council && s.council.some((c: string) => c.includes(fullName) || c.includes('Nguyen Van A'))));
 
-            // Fetch or mock rebuttals awaiting response
-            let mockedRebuttals: Rebuttal[] = [
-                {
-                    id: 'REB101',
-                    evaluationId: 'EVAL101',
-                    studentId: 'S101',
-                    studentName: 'Tran Van Bao',
-                    projectTitle: 'AI Smart Agriculture Tracking',
-                    content: 'We would like to clarify that our model accuracy is 92%, not 82% as stated in the review feedback. The training logs have been updated in repository version 3.',
-                    status: 'Pending',
-                    submittedAt: '2026-06-27'
-                }
-            ];
+            let rebuttalData: Rebuttal[] = [];
+            try {
+                const [pendingRebuttals, evaluations] = await Promise.all([
+                    api.getPendingRebuttals(),
+                    api.getAllEvaluations()
+                ]);
+                const evaluationsById = (evaluations as EvaluationRecord[]).reduce<Record<string, EvaluationRecord>>((map, evaluation) => {
+                    map[evaluation.id] = evaluation;
+                    return map;
+                }, {});
+                const projectsById = parsedProjects.reduce<Record<string, Project>>((map, project) => {
+                    map[project.id] = project;
+                    return map;
+                }, {});
 
-            setRebuttals(mockedRebuttals);
+                rebuttalData = (pendingRebuttals as Rebuttal[]).map(rebuttal => {
+                    const evaluation = evaluationsById[rebuttal.evaluationId];
+                    const project = evaluation ? projectsById[evaluation.projectId] : undefined;
+                    return {
+                        ...rebuttal,
+                        studentName: rebuttal.studentId,
+                        projectTitle: project?.title || evaluation?.projectId || 'Unknown project'
+                    };
+                });
+            } catch (err) {
+                console.warn("Failed to fetch real rebuttals:", err);
+            }
+
+            setRebuttals(rebuttalData);
 
         } catch (err: any) {
             setErrorMsg('Failed to sync council workspace.');
@@ -169,18 +194,17 @@ export default function CouncilDashboard() {
 
         try {
             await api.respondToRebuttal(selectedRebuttal.id, rebuttalResponse);
+            await api.updateRebuttalStatus(selectedRebuttal.id, rebuttalDecision);
             setSuccessMsg(`Successfully responded to rebuttal from ${selectedRebuttal.studentName}!`);
             
             // Update local state
-            setRebuttals(prev => prev.map(r => r.id === selectedRebuttal.id ? { ...r, status: 'Approved', response: rebuttalResponse } : r));
+            setRebuttals(prev => prev.map(r => r.id === selectedRebuttal.id ? { ...r, status: rebuttalDecision, response: rebuttalResponse } : r));
             setSelectedRebuttal(null);
             setRebuttalResponse('');
+            setRebuttalDecision('Approved');
         } catch (err: any) {
-            console.error("API call failed, updating local state for mock demo:", err);
-            setSuccessMsg(`Successfully responded to rebuttal (Demo Mode) for ${selectedRebuttal.studentName}!`);
-            setRebuttals(prev => prev.map(r => r.id === selectedRebuttal.id ? { ...r, status: 'Approved', response: rebuttalResponse } : r));
-            setSelectedRebuttal(null);
-            setRebuttalResponse('');
+            console.error("Failed to respond to rebuttal:", err);
+            setErrorMsg('Failed to respond to rebuttal. Please try again.');
         } finally {
             setSubmittingRebuttal(false);
         }
@@ -305,7 +329,11 @@ export default function CouncilDashboard() {
                                         ) : (
                                             <button 
                                                 className="action-btn-secondary" 
-                                                onClick={() => setSelectedRebuttal(rebuttal)}
+                                                onClick={() => {
+                                                    setSelectedRebuttal(rebuttal);
+                                                    setRebuttalResponse('');
+                                                    setRebuttalDecision('Approved');
+                                                }}
                                             >
                                                 Respond to Rebuttal
                                             </button>
@@ -322,6 +350,18 @@ export default function CouncilDashboard() {
                             <h3 className="section-title-label">Respond to Rebuttal from {selectedRebuttal.studentName}</h3>
                             <form onSubmit={handleRebuttalSubmit} className="feedback-scoring-form">
                                 <div className="form-input-group">
+                                    <label htmlFor="rebuttal-decision-select">Decision</label>
+                                    <select
+                                        id="rebuttal-decision-select"
+                                        value={rebuttalDecision}
+                                        onChange={(e) => setRebuttalDecision(e.target.value as 'Approved' | 'Rejected')}
+                                        required
+                                    >
+                                        <option value="Approved">Approve rebuttal</option>
+                                        <option value="Rejected">Reject rebuttal</option>
+                                    </select>
+                                </div>
+                                <div className="form-input-group">
                                     <label htmlFor="rebuttal-response-text">Your Response Message</label>
                                     <textarea 
                                         id="rebuttal-response-text" 
@@ -336,7 +376,11 @@ export default function CouncilDashboard() {
                                     <button 
                                         type="button" 
                                         className="btn-cancel" 
-                                        onClick={() => setSelectedRebuttal(null)}
+                                        onClick={() => {
+                                            setSelectedRebuttal(null);
+                                            setRebuttalResponse('');
+                                            setRebuttalDecision('Approved');
+                                        }}
                                     >
                                         Cancel
                                     </button>

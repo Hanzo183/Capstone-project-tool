@@ -110,14 +110,29 @@ app.MapGet("/health", async (SchedulingDbContext db) =>
 
 app.MapPost("/rounds", async (CreateRoundRequest request, SchedulingDbContext db) =>
 {
+    if (string.IsNullOrWhiteSpace(request.Name))
+    {
+        return Results.BadRequest(new { message = "Round name is required." });
+    }
+
+    if (request.EndDate < request.StartDate)
+    {
+        return Results.BadRequest(new { message = "End date must be on or after start date." });
+    }
+
+    if (string.IsNullOrWhiteSpace(request.CreatedBy))
+    {
+        return Results.BadRequest(new { message = "CreatedBy is required." });
+    }
+
     var round = new ReviewRound
     {
         Id = ShortId.New("RND"),
-        Name = request.Name,
+        Name = request.Name.Trim(),
         StartDate = request.StartDate,
         EndDate = request.EndDate,
         Status = "Upcoming",
-        CreatedBy = request.CreatedBy,
+        CreatedBy = request.CreatedBy.Trim(),
         CreatedAt = DateTime.UtcNow
     };
 
@@ -150,20 +165,49 @@ app.MapGet("/rounds/{id}/schedule", async (string id, SchedulingDbContext db) =>
 
 app.MapPost("/schedule/assign", async (AssignSlotRequest request, SchedulingDbContext db, IntegrationEventPublisher events) =>
 {
+    if (string.IsNullOrWhiteSpace(request.RoundId) ||
+        string.IsNullOrWhiteSpace(request.ProjectId) ||
+        string.IsNullOrWhiteSpace(request.Room))
+    {
+        return Results.BadRequest(new { message = "Round, project, and room are required." });
+    }
+
+    if (request.DurationMinutes <= 0)
+    {
+        return Results.BadRequest(new { message = "Duration must be greater than 0 minutes." });
+    }
+
+    if (request.CouncilMemberIds is null ||
+        request.CouncilMemberIds.Length == 0 ||
+        request.CouncilMemberIds.Any(string.IsNullOrWhiteSpace))
+    {
+        return Results.BadRequest(new { message = "At least one council member is required." });
+    }
+
+    var roundExists = await db.ReviewRounds.AnyAsync(round => round.Id == request.RoundId);
+    if (!roundExists)
+    {
+        return Results.BadRequest(new { message = "Review round was not found." });
+    }
+
     var slot = new ScheduleSlot
     {
         Id = ShortId.New("SLT"),
-        RoundId = request.RoundId,
-        ProjectId = request.ProjectId,
+        RoundId = request.RoundId.Trim(),
+        ProjectId = request.ProjectId.Trim(),
         ReviewDate = request.ReviewDate,
-        Room = request.Room,
+        Room = request.Room.Trim(),
         DurationMinutes = request.DurationMinutes,
         CreatedAt = DateTime.UtcNow
     };
 
+    var councilMemberIds = request.CouncilMemberIds
+        .Select(memberId => memberId.Trim())
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
     db.ScheduleSlots.Add(slot);
 
-    foreach (var memberId in request.CouncilMemberIds.Distinct(StringComparer.OrdinalIgnoreCase))
+    foreach (var memberId in councilMemberIds)
     {
         db.SlotReviewers.Add(new SlotReviewer { SlotId = slot.Id, UserId = memberId });
     }
@@ -177,7 +221,7 @@ app.MapPost("/schedule/assign", async (AssignSlotRequest request, SchedulingDbCo
         slot.ReviewDate,
         slot.Room,
         slot.DurationMinutes,
-        request.CouncilMemberIds
+        councilMemberIds
     });
 
     return Results.Accepted($"/rounds/{request.RoundId}/schedule", new
@@ -189,7 +233,7 @@ app.MapPost("/schedule/assign", async (AssignSlotRequest request, SchedulingDbCo
             slot.ReviewDate,
             slot.Room,
             slot.DurationMinutes,
-            request.CouncilMemberIds),
+            councilMemberIds),
         @event = "schedule.created"
     });
 }).RequireAuthorization("AdminOnly");

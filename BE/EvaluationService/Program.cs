@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -83,14 +84,31 @@ app.MapGet("/health", async (EvaluationDbContext db) =>
 
 app.MapPost("/evaluations", async (CreateEvaluationRequest request, EvaluationDbContext db, IntegrationEventPublisher events) =>
 {
+    if (string.IsNullOrWhiteSpace(request.ProjectId) ||
+        string.IsNullOrWhiteSpace(request.RoundId) ||
+        string.IsNullOrWhiteSpace(request.EvaluatorId))
+    {
+        return Results.BadRequest(new { message = "Project, round, and evaluator are required." });
+    }
+
+    if (request.Score < 0 || request.Score > 10)
+    {
+        return Results.BadRequest(new { message = "Score must be between 0 and 10." });
+    }
+
+    if (!string.IsNullOrWhiteSpace(request.StudentId) && !IsValidStudentId(request.StudentId.Trim().ToUpperInvariant()))
+    {
+        return Results.BadRequest(new { message = "Student ID must start with 2 letters followed by 6 numbers, for example SE192706." });
+    }
+
     var evaluation = new EvaluationItem
     {
         Id = ShortId.New("EVA"),
-        ProjectId = request.ProjectId,
-        RoundId = request.RoundId,
-        EvaluatorId = request.EvaluatorId,
+        ProjectId = request.ProjectId.Trim(),
+        RoundId = request.RoundId.Trim(),
+        EvaluatorId = request.EvaluatorId.Trim(),
         Score = request.Score,
-        Feedback = request.Feedback,
+        Feedback = request.Feedback?.Trim(),
         SubmittedAt = DateTime.UtcNow
     };
 
@@ -138,6 +156,19 @@ app.MapGet("/evaluations", async (EvaluationDbContext db) =>
 
 app.MapPost("/rebuttals", async (CreateRebuttalRequest request, EvaluationDbContext db, IntegrationEventPublisher events) =>
 {
+    if (string.IsNullOrWhiteSpace(request.EvaluationId) ||
+        string.IsNullOrWhiteSpace(request.StudentId) ||
+        string.IsNullOrWhiteSpace(request.Content))
+    {
+        return Results.BadRequest(new { message = "Evaluation, student, and rebuttal content are required." });
+    }
+
+    var normalizedStudentId = request.StudentId.Trim().ToUpperInvariant();
+    if (!IsValidStudentId(normalizedStudentId))
+    {
+        return Results.BadRequest(new { message = "Student ID must start with 2 letters followed by 6 numbers, for example SE192706." });
+    }
+
     var evaluation = await db.Evaluations.AsNoTracking().FirstOrDefaultAsync(item => item.Id == request.EvaluationId);
     if (evaluation is null)
     {
@@ -147,9 +178,9 @@ app.MapPost("/rebuttals", async (CreateRebuttalRequest request, EvaluationDbCont
     var rebuttal = new RebuttalItem
     {
         Id = ShortId.New("REB"),
-        EvaluationId = request.EvaluationId,
-        StudentId = request.StudentId,
-        Content = request.Content,
+        EvaluationId = request.EvaluationId.Trim(),
+        StudentId = normalizedStudentId,
+        Content = request.Content.Trim(),
         Status = "Pending",
         SubmittedAt = DateTime.UtcNow
     };
@@ -189,16 +220,69 @@ app.MapGet("/rebuttals", async (string? status, EvaluationDbContext db) =>
     return Results.Ok(rebuttals);
 }).RequireAuthorization("RebuttalReviewers");
 
-app.MapPut("/rebuttals/{id}/status", async (string id, UpdateRebuttalStatusRequest request, EvaluationDbContext db) =>
+app.MapGet("/rebuttals/evaluation/{evaluationId}", async (string evaluationId, EvaluationDbContext db) =>
 {
+    var rebuttals = await db.Rebuttals
+        .AsNoTracking()
+        .Where(item => item.EvaluationId == evaluationId)
+        .OrderByDescending(item => item.SubmittedAt)
+        .ToListAsync();
+
+    return Results.Ok(rebuttals);
+}).RequireAuthorization("EvaluationViewers");
+
+app.MapPut("/rebuttals/{id}/status", async (string id, UpdateRebuttalStatusRequest request, EvaluationDbContext db, IntegrationEventPublisher events) =>
+{
+    if (!IsAllowedRebuttalStatus(request.Status))
+    {
+        return Results.BadRequest(new { message = "Status must be Pending, Approved, or Rejected." });
+    }
+
     var rebuttal = await db.Rebuttals.FirstOrDefaultAsync(item => item.Id == id);
     if (rebuttal is null)
     {
         return Results.NotFound();
     }
 
-    rebuttal.Status = request.Status;
-    rebuttal.Response = request.Response;
+    rebuttal.Status = NormalizeRebuttalStatus(request.Status);
+    if (!string.IsNullOrWhiteSpace(request.Response))
+    {
+        rebuttal.Response = request.Response.Trim();
+    }
+
+    rebuttal.ReviewedAt = DateTime.UtcNow;
+    await db.SaveChangesAsync();
+
+    if (rebuttal.Status != "Pending")
+    {
+        await events.PublishAsync("rebuttal.reviewed", new
+        {
+            rebuttal.Id,
+            rebuttal.EvaluationId,
+            rebuttal.StudentId,
+            rebuttal.Status,
+            rebuttal.Response,
+            rebuttal.ReviewedAt
+        });
+    }
+
+    return Results.Ok(rebuttal);
+}).RequireAuthorization("RebuttalReviewers");
+
+app.MapPut("/rebuttals/{id}/respond", async (string id, RespondToRebuttalRequest request, EvaluationDbContext db) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Response))
+    {
+        return Results.BadRequest(new { message = "Response is required." });
+    }
+
+    var rebuttal = await db.Rebuttals.FirstOrDefaultAsync(item => item.Id == id);
+    if (rebuttal is null)
+    {
+        return Results.NotFound();
+    }
+
+    rebuttal.Response = request.Response.Trim();
     rebuttal.ReviewedAt = DateTime.UtcNow;
     await db.SaveChangesAsync();
 
@@ -243,6 +327,18 @@ static bool HasRole(ClaimsPrincipal user, params string[] roles)
 {
     var roleClaims = user.FindAll("role").Concat(user.FindAll(ClaimTypes.Role));
     return roleClaims.Any(claim => roles.Any(role => string.Equals(claim.Value, role, StringComparison.OrdinalIgnoreCase)));
+}
+
+static bool IsValidStudentId(string studentId) =>
+    Regex.IsMatch(studentId, "^[A-Z]{2}\\d{6}$");
+
+static bool IsAllowedRebuttalStatus(string status) => !string.IsNullOrWhiteSpace(NormalizeRebuttalStatus(status));
+
+static string NormalizeRebuttalStatus(string status)
+{
+    string[] allowedStatuses = ["Pending", "Approved", "Rejected"];
+    return allowedStatuses.FirstOrDefault(allowedStatus =>
+        string.Equals(allowedStatus, status?.Trim(), StringComparison.OrdinalIgnoreCase)) ?? "";
 }
 
 sealed class EvaluationDbContext(DbContextOptions<EvaluationDbContext> options) : DbContext(options)
@@ -401,3 +497,4 @@ record RoundReport(string RoundId, int EvaluationCount, decimal AverageScore, IE
 record CreateEvaluationRequest(string ProjectId, string RoundId, string EvaluatorId, decimal Score, string? Feedback, string? StudentId);
 record CreateRebuttalRequest(string EvaluationId, string StudentId, string Content);
 record UpdateRebuttalStatusRequest(string Status, string? Response);
+record RespondToRebuttalRequest(string Response);

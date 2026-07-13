@@ -30,6 +30,12 @@ interface ReviewRound {
     status: string;
 }
 
+const studentIdPattern = /^[A-Za-z]{2}\d{6}$/;
+const emailPattern = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+const isStrongPassword = (password: string) =>
+    password.length >= 8;
+
 export default function AdminDashboard() {
     const [users, setUsers] = useState<User[]>([]);
     const [projects, setProjects] = useState<Project[]>([]);
@@ -103,9 +109,19 @@ export default function AdminDashboard() {
         e.preventDefault();
         const adminId = localStorage.getItem('userId') || 'admin';
 
+        if (!newRound.name.trim()) {
+            alert('Round name is required.');
+            return;
+        }
+
+        if (!newRound.startDate || !newRound.endDate || newRound.endDate < newRound.startDate) {
+            alert('End date must be on or after start date.');
+            return;
+        }
+
         try {
             await api.createReviewRound({
-                name: newRound.name,
+                name: newRound.name.trim(),
                 startDate: newRound.startDate,
                 endDate: newRound.endDate,
                 createdBy: adminId
@@ -126,12 +142,37 @@ export default function AdminDashboard() {
     // --- HANDLE CREATE USER ---
     const handleCreateUser = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!newUser.fullName.trim()) {
+            alert('Full name is required.');
+            return;
+        }
+
+        if (!emailPattern.test(newUser.email.trim())) {
+            alert('Please enter a valid email address.');
+            return;
+        }
+
+        if (newUser.role === 'Student' && !newUser.studentId.trim()) {
+            alert('Student ID is required for student accounts.');
+            return;
+        }
+
+        if (newUser.studentId.trim() && !studentIdPattern.test(newUser.studentId.trim())) {
+            alert('Student ID must start with 2 letters followed by 6 numbers, for example SE192706.');
+            return;
+        }
+
+        if (!isStrongPassword(newUser.password)) {
+            alert('Password must be at least 8 characters.');
+            return;
+        }
+
         try {
             await api.register({
-                email: newUser.email,
+                email: newUser.email.trim(),
                 password: newUser.password,
-                fullName: newUser.fullName,
-                studentId: newUser.studentId || undefined,
+                fullName: newUser.fullName.trim(),
+                studentId: newUser.studentId.trim() ? newUser.studentId.trim().toUpperCase() : undefined,
                 role: newUser.role
             });
 
@@ -477,6 +518,7 @@ export default function AdminDashboard() {
                                 <input
                                     type="date"
                                     required
+                                    minLength={8}
                                     value={newRound.startDate}
                                     onChange={(e) => setNewRound({ ...newRound, startDate: e.target.value })}
                                     style={{
@@ -624,6 +666,9 @@ export default function AdminDashboard() {
                                 <input
                                     type="text"
                                     placeholder="SE123456"
+                                    pattern="[A-Za-z]{2}[0-9]{6}"
+                                    title="Student ID must start with 2 letters followed by 6 numbers, for example SE192706."
+                                    required={newUser.role === 'Student'}
                                     value={newUser.studentId}
                                     onChange={(e) => setNewUser({ ...newUser, studentId: e.target.value })}
                                     style={{

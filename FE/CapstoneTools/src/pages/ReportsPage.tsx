@@ -293,12 +293,6 @@ export default function ReportsPage() {
         }
     };
 
-    // --- GET ROUND NAME ---
-    const getRoundName = (id: string) => {
-        const round = rounds.find(r => r.id === id);
-        return round?.name || id;
-    };
-
     // Redirect if not authorized
     if (!isAdminOrLecturer) {
         return (

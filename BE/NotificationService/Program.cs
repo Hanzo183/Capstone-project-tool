@@ -131,15 +131,23 @@ app.MapPut("/notifications/preferences/{userId}", async (string userId, UpdateNo
 
 app.MapPost("/notify", async (CreateNotificationRequest request, NotificationDbContext db) =>
 {
+    if (string.IsNullOrWhiteSpace(request.UserId) ||
+        string.IsNullOrWhiteSpace(request.Title) ||
+        string.IsNullOrWhiteSpace(request.Body) ||
+        string.IsNullOrWhiteSpace(request.Type))
+    {
+        return Results.BadRequest(new { message = "User, title, body, and type are required." });
+    }
+
     var notification = new NotificationItem
     {
         Id = ShortId.New("NOT"),
-        UserId = request.UserId,
-        Title = request.Title,
-        Body = request.Body,
+        UserId = request.UserId.Trim(),
+        Title = request.Title.Trim(),
+        Body = request.Body.Trim(),
         IsRead = false,
         CreatedAt = DateTime.UtcNow,
-        Type = request.Type
+        Type = request.Type.Trim()
     };
 
     db.Notifications.Add(notification);
@@ -307,7 +315,8 @@ static class NotificationFactory
         "evaluation.completed",
         "deadline.reminder",
         "user.registered",
-        "rebuttal.submitted"
+        "rebuttal.submitted",
+        "rebuttal.reviewed"
     ];
 
     public static IEnumerable<NotificationItem> Create(IntegrationEventEnvelope integrationEvent)
@@ -321,8 +330,18 @@ static class NotificationFactory
             "evaluation.completed" => CreateOne(payload, "StudentId", "Evaluation completed", $"Score released for project {Read(payload, "ProjectId", "unknown")}.", integrationEvent.Name),
             "deadline.reminder" => CreateOne(payload, "ProjectId", "Review deadline reminder", $"Review slot starts at {Read(payload, "ReviewDate", "the scheduled time")}.", integrationEvent.Name),
             "rebuttal.submitted" => CreateOne(payload, "EvaluatorId", "Rebuttal pending review", $"A rebuttal was submitted for project {Read(payload, "ProjectId", "unknown")}.", integrationEvent.Name),
+            "rebuttal.reviewed" => CreateOne(payload, "StudentId", "Rebuttal reviewed", BuildRebuttalReviewedBody(payload), integrationEvent.Name),
             _ => []
         };
+    }
+
+    private static string BuildRebuttalReviewedBody(JsonElement payload)
+    {
+        var status = Read(payload, "Status", "reviewed");
+        var response = Read(payload, "Response", "");
+        return string.IsNullOrWhiteSpace(response)
+            ? $"Your rebuttal was {status}."
+            : $"Your rebuttal was {status}. Council comment: {response}";
     }
 
     private static IEnumerable<NotificationItem> CreateScheduleNotifications(JsonElement payload, string type)

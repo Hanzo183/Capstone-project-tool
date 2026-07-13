@@ -14,6 +14,9 @@ interface RegisterFormData {
     role: string;
 }
 
+const studentIdPattern = /^[A-Za-z]{2}\d{6}$/;
+const emailPattern = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
 export default function Register() {
     const navigate = useNavigate();
     const [formData, setFormData] = useState<RegisterFormData>({
@@ -57,6 +60,30 @@ export default function Register() {
         setIsLoading(true);
 
         // Validation
+        if (!formData.fullName.trim()) {
+            setError('Full name is required.');
+            setIsLoading(false);
+            return;
+        }
+
+        if (!emailPattern.test(formData.email.trim())) {
+            setError('Please enter a valid email address.');
+            setIsLoading(false);
+            return;
+        }
+
+        if (formData.role === 'Student' && !formData.studentId.trim()) {
+            setError('Student ID is required for student accounts.');
+            setIsLoading(false);
+            return;
+        }
+
+        if (formData.studentId.trim() && !studentIdPattern.test(formData.studentId.trim())) {
+            setError('Student ID must start with 2 letters followed by 6 numbers, for example SE192706.');
+            setIsLoading(false);
+            return;
+        }
+
         if (formData.password !== formData.confirmPassword) {
             setError('Passwords do not match!');
             setIsLoading(false);
@@ -71,11 +98,11 @@ export default function Register() {
 
         try {
             // Call register API
-            const response = await api.register({
-                email: formData.email,
+            await api.register({
+                email: formData.email.trim(),
                 password: formData.password,
-                fullName: formData.fullName,
-                studentId: formData.studentId || undefined,
+                fullName: formData.fullName.trim(),
+                studentId: formData.studentId.trim() ? formData.studentId.trim().toUpperCase() : undefined,
                 role: formData.role
             });
 
@@ -172,6 +199,9 @@ export default function Register() {
                             value={formData.studentId}
                             onChange={handleChange}
                             placeholder="SE192706"
+                            pattern="[A-Za-z]{2}[0-9]{6}"
+                            title="Student ID must start with 2 letters followed by 6 numbers, for example SE192706."
+                            required={formData.role === 'Student'}
                         />
                     </div>
 
@@ -226,7 +256,7 @@ export default function Register() {
                             </div>
                         )}
                         <small className="password-hint">
-                            Min 8 characters with uppercase, lowercase, number, and special character
+                            Minimum 8 characters
                         </small>
                     </div>
 

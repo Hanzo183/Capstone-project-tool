@@ -13,6 +13,7 @@ interface MentoredGroup {
     projectId: string;
     teamId?: string;
     status?: string;
+    members: string[];
 }
 
 interface UpcomingCouncil {
@@ -37,12 +38,21 @@ interface BackendProject {
     description?: string;
 }
 
+interface ProjectMember {
+    projectId: string;
+    studentId: string;
+    isLeader?: boolean;
+}
+
+const studentIdPattern = /^[A-Za-z]{2}\d{6}$/;
+
 export default function LecturerDashboard() {
     const [mentoredGroups, setMentoredGroups] = useState<MentoredGroup[]>([]);
     const [upcomingCouncils, setUpcomingCouncils] = useState<UpcomingCouncil[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [errorMsg, setErrorMsg] = useState('');
     const [showCreateModal, setShowCreateModal] = useState(false);
+    const [memberInputs, setMemberInputs] = useState<Record<string, string>>({});
 
     // Get current lecturer info from localStorage
     const lecturerId = localStorage.getItem('userId') || 'SE192879';
@@ -62,8 +72,25 @@ export default function LecturerDashboard() {
                     (p: BackendProject) => p.lecturerId === lecturerId || p.lecturerId === null
                 );
 
+                const memberEntries = await Promise.all(
+                    lecturerProjects.map(async (project: BackendProject) => {
+                        try {
+                            const members = await api.getProjectMembers(project.id);
+                            return [project.id, members] as const;
+                        } catch {
+                            return [project.id, []] as const;
+                        }
+                    })
+                );
+                const membersByProject = memberEntries.reduce<Record<string, ProjectMember[]>>((map, [projectId, members]) => {
+                    map[projectId] = members;
+                    return map;
+                }, {});
+
                 // Map to MentoredGroup format
                 const mappedGroups: MentoredGroup[] = lecturerProjects.map((project: BackendProject) => {
+                    const members = membersByProject[project.id] ?? [];
+                    const leader = members.find(member => member.isLeader)?.studentId || project.teamLeaderId || 'Not Assigned';
                     let submissionStatus: 'Submitted' | 'Pending' | 'Overdue' = 'Pending';
                     if (project.status === 'Submitted' || project.status === 'In Review') {
                         submissionStatus = 'Submitted';
@@ -75,14 +102,15 @@ export default function LecturerDashboard() {
                         id: project.id,
                         projectId: project.id,
                         topicName: project.title || 'Untitled Project',
-                        studentLeader: project.teamLeaderId || 'Not Assigned',
-                        memberCount: 4,
+                        studentLeader: leader,
+                        memberCount: members.length,
                         submissionStatus: submissionStatus,
                         lastUpdated: project.updatedAt
                             ? new Date(project.updatedAt).toLocaleString()
                             : 'Recent',
                         teamId: project.teamId,
-                        status: project.status
+                        status: project.status,
+                        members: members.map(member => member.studentId)
                     };
                 });
 
@@ -137,7 +165,7 @@ export default function LecturerDashboard() {
     // --- HANDLE OPEN EVALUATION ---
     const handleOpenEvaluation = (projectId: string, projectTitle: string) => {
         // ✅ FIXED: Use alert or navigate
-        alert(`Opening evaluation sheet for: ${projectTitle}`);
+        alert(`Opening evaluation sheet for: ${projectTitle} (${projectId})`);
         // navigate(`/evaluation/${projectId}`);
     };
 
@@ -154,13 +182,41 @@ export default function LecturerDashboard() {
         // Get form data
         const form = e.target as HTMLFormElement;
         const formData = new FormData(form);
+        const title = String(formData.get('title') || '').trim();
+        const teamId = String(formData.get('teamId') || '').trim();
+        const teamLeaderId = String(formData.get('teamLeaderId') || '').trim().toUpperCase();
+        const memberStudentIds = String(formData.get('memberStudentIds') || '')
+            .split(/[,\s]+/)
+            .map(memberId => memberId.trim().toUpperCase())
+            .filter(Boolean);
+
+        if (title.length < 3) {
+            alert('Project title must be at least 3 characters.');
+            return;
+        }
+
+        if (!teamId) {
+            alert('Team ID is required.');
+            return;
+        }
+
+        if (teamLeaderId && !studentIdPattern.test(teamLeaderId)) {
+            alert('Team leader ID must start with 2 letters followed by 6 numbers, for example SE192706.');
+            return;
+        }
+
+        if (memberStudentIds.some(memberId => !studentIdPattern.test(memberId))) {
+            alert('Each member Student ID must start with 2 letters followed by 6 numbers, for example SE192706.');
+            return;
+        }
 
         const projectData = {
-            title: formData.get('title') as string,
-            description: formData.get('description') as string,
-            teamId: formData.get('teamId') as string,
+            title,
+            description: String(formData.get('description') || '').trim(),
+            teamId,
             lecturerId: lecturerId,
-            teamLeaderId: formData.get('teamLeaderId') as string,
+            teamLeaderId: teamLeaderId || undefined,
+            memberStudentIds,
             status: 'Draft'
         };
 
@@ -172,6 +228,53 @@ export default function LecturerDashboard() {
             window.location.reload();
         } catch  {
             alert('❌ Failed to create project. Please try again.');
+        }
+    };
+
+    const handleAssignMember = async (projectId: string) => {
+        const studentId = (memberInputs[projectId] || '').trim().toUpperCase();
+        if (!studentIdPattern.test(studentId)) {
+            alert('Student ID must start with 2 letters followed by 6 numbers, for example SE192706.');
+            return;
+        }
+
+        try {
+            await api.assignProjectMember(projectId, studentId);
+            setMentoredGroups(prev => prev.map(group => {
+                if (group.projectId !== projectId || group.members.includes(studentId)) {
+                    return group;
+                }
+
+                return {
+                    ...group,
+                    members: [...group.members, studentId],
+                    memberCount: group.memberCount + 1
+                };
+            }));
+            setMemberInputs(prev => ({ ...prev, [projectId]: '' }));
+        } catch (err: any) {
+            alert(err.message || 'Failed to assign member.');
+        }
+    };
+
+    const handleRemoveMember = async (projectId: string, studentId: string) => {
+        try {
+            await api.removeProjectMember(projectId, studentId);
+            setMentoredGroups(prev => prev.map(group => {
+                if (group.projectId !== projectId) {
+                    return group;
+                }
+
+                const members = group.members.filter(member => member !== studentId);
+                return {
+                    ...group,
+                    members,
+                    memberCount: members.length,
+                    studentLeader: group.studentLeader === studentId ? 'Not Assigned' : group.studentLeader
+                };
+            }));
+        } catch (err: any) {
+            alert(err.message || 'Failed to remove member.');
         }
     };
 
@@ -280,6 +383,81 @@ export default function LecturerDashboard() {
                                                 <p style={{ margin: 0, fontSize: '0.85rem', color: '#6b7280' }}>
                                                     Leader: {group.studentLeader} • {group.memberCount} Members
                                                 </p>
+                                            </div>
+                                        </div>
+
+                                        <div style={{ marginTop: '0.75rem' }}>
+                                            <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                                {group.members.length === 0 ? (
+                                                    <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>No members assigned</span>
+                                                ) : (
+                                                    group.members.map(memberId => (
+                                                        <span key={memberId} style={{
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.25rem',
+                                                            padding: '0.15rem 0.45rem',
+                                                            borderRadius: '999px',
+                                                            background: '#e0f2fe',
+                                                            color: '#075985',
+                                                            fontSize: '0.75rem',
+                                                            fontWeight: 600
+                                                        }}>
+                                                            {memberId}
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleRemoveMember(group.projectId, memberId)}
+                                                                style={{
+                                                                    border: 'none',
+                                                                    background: 'transparent',
+                                                                    color: '#075985',
+                                                                    cursor: 'pointer',
+                                                                    fontWeight: 800,
+                                                                    padding: 0
+                                                                }}
+                                                                aria-label={`Remove ${memberId}`}
+                                                            >
+                                                                x
+                                                            </button>
+                                                        </span>
+                                                    ))
+                                                )}
+                                            </div>
+                                            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
+                                                <input
+                                                    type="text"
+                                                    value={memberInputs[group.projectId] || ''}
+                                                    onChange={(event) => setMemberInputs(prev => ({
+                                                        ...prev,
+                                                        [group.projectId]: event.target.value
+                                                    }))}
+                                                    placeholder="SE192706"
+                                                    pattern="[A-Za-z]{2}[0-9]{6}"
+                                                    title="Student ID must start with 2 letters followed by 6 numbers."
+                                                    style={{
+                                                        flex: '1 1 140px',
+                                                        padding: '0.4rem 0.55rem',
+                                                        borderRadius: '6px',
+                                                        border: '1px solid #d1d5db',
+                                                        fontSize: '0.8rem'
+                                                    }}
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleAssignMember(group.projectId)}
+                                                    style={{
+                                                        padding: '0.4rem 0.75rem',
+                                                        background: '#0f766e',
+                                                        color: 'white',
+                                                        border: 'none',
+                                                        borderRadius: '6px',
+                                                        cursor: 'pointer',
+                                                        fontSize: '0.8rem',
+                                                        fontWeight: 600
+                                                    }}
+                                                >
+                                                    Assign
+                                                </button>
                                             </div>
                                         </div>
 
@@ -485,6 +663,8 @@ export default function LecturerDashboard() {
                                     type="text"
                                     name="teamLeaderId"
                                     placeholder="e.g. SE192706"
+                                    pattern="[A-Za-z]{2}[0-9]{6}"
+                                    title="Student ID must start with 2 letters followed by 6 numbers."
                                     style={{
                                         width: '100%',
                                         padding: '0.5rem',
@@ -492,6 +672,27 @@ export default function LecturerDashboard() {
                                         border: '1px solid #d1d5db'
                                     }}
                                 />
+                            </div>
+
+                            <div style={{ marginBottom: '1rem' }}>
+                                <label style={{ display: 'block', marginBottom: '0.25rem', fontWeight: '500' }}>
+                                    Member Student IDs
+                                </label>
+                                <textarea
+                                    name="memberStudentIds"
+                                    rows={3}
+                                    placeholder="SE192706, SE192707"
+                                    style={{
+                                        width: '100%',
+                                        padding: '0.5rem',
+                                        borderRadius: '6px',
+                                        border: '1px solid #d1d5db',
+                                        resize: 'vertical'
+                                    }}
+                                />
+                                <small style={{ color: '#6b7280' }}>
+                                    Separate multiple student IDs with commas or spaces. Format: 2 letters and 6 numbers.
+                                </small>
                             </div>
 
                             <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem' }}>

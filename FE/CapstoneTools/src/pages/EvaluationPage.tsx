@@ -28,7 +28,6 @@ interface Rebuttal {
 export default function EvaluationPage() {
     const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
     const [rebuttals, setRebuttals] = useState<Rebuttal[]>([]);
-    const [projectId, setProjectId] = useState<string>('');
     const [isLoading, setIsLoading] = useState(true);
     const [errorMsg, setErrorMsg] = useState('');
     const [showRebuttalForm, setShowRebuttalForm] = useState(false);
@@ -44,24 +43,27 @@ export default function EvaluationPage() {
             try {
                 setIsLoading(true);
 
-                // Get user's project
                 const projects = await api.getProjects();
-                if (projects && projects.length > 0) {
-                    const project = projects[0];
-                    setProjectId(project.id);
+                const userProjects = Array.isArray(projects) ? projects : [];
+                const visibleProjects = userProjects;
 
-                    // Get evaluations for this project
-                    const evalData = await api.getEvaluations(project.id);
-                    setEvaluations(evalData);
-
-                    // Get rebuttals for each evaluation
-                    const rebuttalPromises = evalData.map((evalItem: Evaluation) =>
-                        api.getRebuttals(evalItem.id).catch(() => [])
-                    );
-                    const rebuttalResults = await Promise.all(rebuttalPromises);
-                    const allRebuttals = rebuttalResults.flat();
-                    setRebuttals(allRebuttals);
+                if (visibleProjects.length === 0) {
+                    setEvaluations([]);
+                    setRebuttals([]);
+                    return;
                 }
+
+                const project = visibleProjects[0];
+
+                const evalData = await api.getEvaluations(project.id);
+                setEvaluations(evalData);
+
+                const rebuttalPromises = evalData.map((evalItem: Evaluation) =>
+                    api.getRebuttals(evalItem.id).catch(() => [])
+                );
+                const rebuttalResults = await Promise.all(rebuttalPromises);
+                const allRebuttals = rebuttalResults.flat();
+                setRebuttals(allRebuttals);
             } catch (err) {
                 console.error('Failed to load evaluations:', err);
                 setErrorMsg('Could not load evaluation data.');

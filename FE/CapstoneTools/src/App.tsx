@@ -87,7 +87,7 @@ function App() {
                     />
                     <Route path="evaluation"
                         element={
-                            <ProtectedRoute allowedRoles={['Student', 'Admin', 'Lecturer', 'CouncilMember']}>
+                            <ProtectedRoute allowedRoles={['Student']}>
                                 <EvaluationPage />
                             </ProtectedRoute>
                         }

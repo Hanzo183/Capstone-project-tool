@@ -76,6 +76,10 @@ CREATE TABLE Users (
     CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
 );
 
+CREATE UNIQUE INDEX UX_Users_StudentId
+ON Users(StudentId)
+WHERE StudentId IS NOT NULL;
+
 CREATE TABLE RefreshTokens (
     Id NVARCHAR(32) NOT NULL PRIMARY KEY,
     UserId NVARCHAR(32) NOT NULL,
@@ -120,6 +124,9 @@ CREATE TABLE Projects (
     UpdatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
 );
 
+CREATE UNIQUE INDEX UX_Projects_TeamId
+ON Projects(TeamId);
+
 CREATE TABLE Submissions (
     Id NVARCHAR(32) NOT NULL PRIMARY KEY,
     ProjectId NVARCHAR(32) NOT NULL,
@@ -129,6 +136,15 @@ CREATE TABLE Submissions (
     SubmittedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     SubmittedBy NVARCHAR(100) NOT NULL,
     CONSTRAINT FK_Submissions_Projects FOREIGN KEY (ProjectId) REFERENCES Projects(Id)
+);
+
+CREATE TABLE ProjectMembers (
+    ProjectId NVARCHAR(32) NOT NULL,
+    StudentId NVARCHAR(50) NOT NULL,
+    IsLeader BIT NOT NULL DEFAULT 0,
+    AddedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT PK_ProjectMembers PRIMARY KEY (ProjectId, StudentId),
+    CONSTRAINT FK_ProjectMembers_Projects FOREIGN KEY (ProjectId) REFERENCES Projects(Id) ON DELETE CASCADE
 );
 
 INSERT INTO Projects (Id, Title, Description, TeamId, TeamLeaderId, LecturerId, Status, RoundId)
@@ -142,6 +158,12 @@ VALUES
 ('SUB-1001', 'PRJ-1001', 'https://files.local/proposal-v1.pdf', 'proposal-v1.pdf', 1, 'SE192706'),
 ('SUB-1002', 'PRJ-1001', 'https://files.local/architecture-v2.pdf', 'architecture-v2.pdf', 2, 'SE192706'),
 ('SUB-1003', 'PRJ-1002', 'https://files.local/submission-quality-v1.pdf', 'submission-quality-v1.pdf', 1, 'SE192706');
+
+INSERT INTO ProjectMembers (ProjectId, StudentId, IsLeader)
+VALUES
+('PRJ-1001', 'SE192706', 1),
+('PRJ-1002', 'SE192706', 1),
+('PRJ-1003', 'SE192706', 1);
 GO
 
 USE SchedulingDb;

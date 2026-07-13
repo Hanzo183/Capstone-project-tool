@@ -69,7 +69,7 @@ export default function Layout() {
                     )}
 
                     {/* ✅ ADDED: Evaluation Page (Student & Lecturer & Council) */}
-                    {(role === 'Student' || role === 'Lecturer' || role === 'CouncilMember') && (
+                    {role === 'Student' && (
                         <NavLink
                             to="/evaluation"
                             className={({ isActive }) => `nav-anchor-link ${isActive ? 'active-node' : ''}`}

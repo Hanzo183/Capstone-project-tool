@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -79,13 +80,32 @@ app.MapGet("/health", async (IdentityDbContext db) =>
 
 app.MapPost("/auth/register", async (RegisterRequest request, IdentityDbContext db, IntegrationEventPublisher events) =>
 {
-    var emailExists = await db.Users.AnyAsync(user => user.Email == request.Email);
+    var validationError = ValidateRegisterRequest(request);
+    if (validationError is not null)
+    {
+        return Results.BadRequest(new { message = validationError });
+    }
+
+    var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+    var normalizedRole = NormalizeRole(request.Role);
+    var normalizedStudentId = NormalizeStudentId(request.StudentId);
+
+    var emailExists = await db.Users.AnyAsync(user => user.Email == normalizedEmail);
     if (emailExists)
     {
         return Results.Conflict(new { message = "Email is already registered." });
     }
 
-    var user = UserAccount.Create(request.StudentId, request.FullName, request.Email, request.Password, request.Role);
+    if (!string.IsNullOrWhiteSpace(normalizedStudentId))
+    {
+        var studentIdExists = await db.Users.AnyAsync(user => user.StudentId == normalizedStudentId || user.Id == normalizedStudentId);
+        if (studentIdExists)
+        {
+            return Results.Conflict(new { message = "Student ID is already registered." });
+        }
+    }
+
+    var user = UserAccount.Create(normalizedStudentId, request.FullName.Trim(), normalizedEmail, request.Password, normalizedRole);
     db.Users.Add(user);
     await db.SaveChangesAsync();
     await events.PublishAsync("user.registered", new
@@ -102,7 +122,13 @@ app.MapPost("/auth/register", async (RegisterRequest request, IdentityDbContext 
 
 app.MapPost("/auth/login", async (LoginRequest request, IdentityDbContext db) =>
 {
-    var user = await db.Users.FirstOrDefaultAsync(candidate => candidate.Email == request.Email);
+    if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
+    {
+        return Results.BadRequest(new { message = "Email and password are required." });
+    }
+
+    var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+    var user = await db.Users.FirstOrDefaultAsync(candidate => candidate.Email == normalizedEmail);
     if (user is null || !VerifyPassword(request.Password, user.PasswordHash))
     {
         return Results.Json(
@@ -188,7 +214,13 @@ app.MapPost("/auth/refresh", async (RefreshRequest request, IdentityDbContext db
 
 app.MapPost("/auth/forgot-password", async (ForgotPasswordRequest request, IdentityDbContext db) =>
 {
-    var user = await db.Users.FirstOrDefaultAsync(candidate => candidate.Email == request.Email);
+    if (!IsValidEmail(request.Email))
+    {
+        return Results.BadRequest(new { message = "A valid email address is required." });
+    }
+
+    var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+    var user = await db.Users.FirstOrDefaultAsync(candidate => candidate.Email == normalizedEmail);
     if (user is null || !user.IsActive)
     {
         return Results.Ok(new
@@ -218,7 +250,19 @@ app.MapPost("/auth/forgot-password", async (ForgotPasswordRequest request, Ident
 
 app.MapPost("/auth/reset-password", async (ResetPasswordRequest request, IdentityDbContext db) =>
 {
-    var user = await db.Users.FirstOrDefaultAsync(candidate => candidate.Email == request.Email);
+    if (!IsValidEmail(request.Email) || string.IsNullOrWhiteSpace(request.Token))
+    {
+        return Results.BadRequest(new { message = "Email and reset token are required." });
+    }
+
+    var passwordError = ValidatePassword(request.NewPassword);
+    if (passwordError is not null)
+    {
+        return Results.BadRequest(new { message = passwordError });
+    }
+
+    var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+    var user = await db.Users.FirstOrDefaultAsync(candidate => candidate.Email == normalizedEmail);
     if (user is null || !user.IsActive)
     {
         return Results.BadRequest(new { message = "Invalid or expired password reset token." });
@@ -267,13 +311,18 @@ app.MapGet("/users/{id}", async (string id, IdentityDbContext db) =>
 
 app.MapPut("/users/{id}/role", async (string id, UpdateRoleRequest request, IdentityDbContext db) =>
 {
+    if (!IsAllowedRole(request.Role))
+    {
+        return Results.BadRequest(new { message = "Role must be Student, Lecturer, CouncilMember, or Admin." });
+    }
+
     var user = await db.Users.FirstOrDefaultAsync(candidate => candidate.Id == id);
     if (user is null)
     {
         return Results.NotFound();
     }
 
-    user.Role = request.Role;
+    user.Role = NormalizeRole(request.Role);
     await db.SaveChangesAsync();
 
     return Results.Ok(ToUserResponse(user));
@@ -297,6 +346,68 @@ app.Run();
 
 static UserResponse ToUserResponse(UserAccount user) =>
     new(user.Id, user.StudentId, user.FullName, user.Email, user.Role, user.IsActive, user.CreatedAt);
+
+static string? ValidateRegisterRequest(RegisterRequest request)
+{
+    if (string.IsNullOrWhiteSpace(request.FullName) || request.FullName.Trim().Length < 2)
+    {
+        return "Full name must be at least 2 characters.";
+    }
+
+    if (!IsValidEmail(request.Email))
+    {
+        return "A valid email address is required.";
+    }
+
+    if (!IsAllowedRole(request.Role))
+    {
+        return "Role must be Student, Lecturer, CouncilMember, or Admin.";
+    }
+
+    var normalizedRole = NormalizeRole(request.Role);
+    var normalizedStudentId = NormalizeStudentId(request.StudentId);
+    if (normalizedRole == "Student" && string.IsNullOrWhiteSpace(normalizedStudentId))
+    {
+        return "Student ID is required for student accounts.";
+    }
+
+    if (!string.IsNullOrWhiteSpace(normalizedStudentId) && !IsValidStudentId(normalizedStudentId))
+    {
+        return "Student ID must start with 2 letters followed by 6 numbers, for example SE192706.";
+    }
+
+    return ValidatePassword(request.Password);
+}
+
+static string? ValidatePassword(string password)
+{
+    if (string.IsNullOrWhiteSpace(password) || password.Length < 8)
+    {
+        return "Password must be at least 8 characters long.";
+    }
+
+    return null;
+}
+
+static bool IsValidEmail(string email) =>
+    !string.IsNullOrWhiteSpace(email) &&
+    Regex.IsMatch(email.Trim(), "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
+
+static bool IsValidStudentId(string studentId) =>
+    Regex.IsMatch(studentId, "^[A-Z]{2}\\d{6}$");
+
+static string? NormalizeStudentId(string? studentId) =>
+    string.IsNullOrWhiteSpace(studentId) ? null : studentId.Trim().ToUpperInvariant();
+
+static string NormalizeRole(string role)
+{
+    string[] allowedRoles = ["Student", "Lecturer", "CouncilMember", "Admin"];
+    var match = allowedRoles.FirstOrDefault(allowedRole =>
+        string.Equals(allowedRole, role?.Trim(), StringComparison.OrdinalIgnoreCase));
+    return match ?? "";
+}
+
+static bool IsAllowedRole(string role) => !string.IsNullOrWhiteSpace(NormalizeRole(role));
 
 static bool VerifyPassword(string password, string storedHash)
 {
@@ -351,6 +462,7 @@ sealed class IdentityDbContext(DbContextOptions<IdentityDbContext> options) : Db
         modelBuilder.Entity<UserAccount>().ToTable("Users");
         modelBuilder.Entity<UserAccount>().HasKey(user => user.Id);
         modelBuilder.Entity<UserAccount>().HasIndex(user => user.Email).IsUnique();
+        modelBuilder.Entity<UserAccount>().HasIndex(user => user.StudentId).IsUnique().HasFilter("[StudentId] IS NOT NULL");
         modelBuilder.Entity<RefreshToken>().ToTable("RefreshTokens");
         modelBuilder.Entity<RefreshToken>().HasKey(token => token.Id);
         modelBuilder.Entity<RefreshToken>()
@@ -381,7 +493,7 @@ sealed class UserAccount
     public static UserAccount Create(string? studentId, string fullName, string email, string password, string role) =>
         new()
         {
-            Id = studentId?.StartsWith("SE", StringComparison.OrdinalIgnoreCase) == true ? studentId : ShortId.New("USR"),
+            Id = studentId is not null && Regex.IsMatch(studentId, "^[A-Z]{2}\\d{6}$") ? studentId : ShortId.New("USR"),
             StudentId = studentId,
             FullName = fullName,
             Email = email,
