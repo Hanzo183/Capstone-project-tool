@@ -1,0 +1,782 @@
+/* src/pages/ReportsPage.css */
+
+.reports-page {
+    padding: 1.5rem;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.reports-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+}
+
+    .reports-header h2 {
+        font-size: 1.8rem;
+        color: #1e293b;
+        margin: 0;
+    }
+
+    .reports-header p {
+        color: #6b7280;
+        margin: 0.25rem 0 0 0;
+    }
+
+.error-banner {
+    background: #fee2e2;
+    color: #dc2626;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    border: 1px solid #fecaca;
+}
+
+/* Round Selector */
+.round-selector {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+    .round-selector label {
+        font-weight: 500;
+        color: #374151;
+    }
+
+    .round-selector select {
+        padding: 0.5rem 1rem;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        font-size: 1rem;
+        background: white;
+        min-width: 200px;
+    }
+
+        .round-selector select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+.loading-state {
+    text-align: center;
+    padding: 3rem;
+    color: #6b7280;
+}
+
+/* Summary Cards */
+.summary-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.summary-card {
+    background: white;
+    padding: 1rem 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    text-align: center;
+}
+
+    .summary-card .summary-label {
+        display: block;
+        font-size: 0.8rem;
+        color: #6b7280;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .summary-card .summary-value {
+        display: block;
+        font-size: 2rem;
+        font-weight: 700;
+        color: #1e293b;
+        margin-top: 0.25rem;
+    }
+
+    .summary-card.green .summary-value {
+        color: #22c55e;
+    }
+
+    .summary-card.yellow .summary-value {
+        color: #f59e0b;
+    }
+
+    .summary-card.blue .summary-value {
+        color: #3b82f6;
+    }
+
+    .summary-card.purple .summary-value {
+        color: #8b5cf6;
+    }
+
+/* Top Performers */
+.top-performers {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    margin-bottom: 1.5rem;
+}
+
+    .top-performers h3 {
+        margin: 0 0 1rem 0;
+        font-size: 1.2rem;
+        color: #1e293b;
+    }
+
+.performer-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.performer-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.5rem 0.75rem;
+    background: #f8fafc;
+    border-radius: 6px;
+}
+
+.performer-rank {
+    font-weight: 700;
+    color: #3b82f6;
+    min-width: 40px;
+}
+
+.performer-info {
+    flex: 1;
+}
+
+.performer-title {
+    font-weight: 500;
+    color: #1e293b;
+}
+
+.performer-team {
+    font-size: 0.8rem;
+    color: #6b7280;
+    margin-left: 0.5rem;
+}
+
+.performer-score {
+    font-weight: 700;
+    color: #22c55e;
+}
+
+/* Evaluation Table */
+.evaluation-table-section {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.table-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+    .table-header h3 {
+        margin: 0;
+        font-size: 1.2rem;
+        color: #1e293b;
+    }
+
+.table-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.btn-download-pdf,
+.btn-export-csv {
+    padding: 0.4rem 1rem;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.btn-download-pdf {
+    background: #3b82f6;
+    color: white;
+}
+
+    .btn-download-pdf:hover:not(:disabled) {
+        background: #2563eb;
+    }
+
+    .btn-download-pdf:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+.btn-export-csv {
+    background: #22c55e;
+    color: white;
+}
+
+    .btn-export-csv:hover {
+        background: #16a34a;
+    }
+
+.table-responsive {
+    overflow-x: auto;
+}
+
+.evaluation-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+    .evaluation-table thead {
+        background: #f1f5f9;
+    }
+
+    .evaluation-table th {
+        padding: 0.6rem 0.75rem;
+        text-align: left;
+        font-weight: 600;
+        color: #475569;
+        border-bottom: 2px solid #e5e7eb;
+    }
+
+    .evaluation-table td {
+        padding: 0.6rem 0.75rem;
+        border-bottom: 1px solid #e5e7eb;
+        vertical-align: middle;
+    }
+
+    .evaluation-table tbody tr:hover {
+        background: #f8fafc;
+    }
+
+.project-cell {
+    display: flex;
+    flex-direction: column;
+}
+
+.project-title {
+    font-weight: 500;
+    color: #1e293b;
+}
+
+.project-id {
+    font-size: 0.7rem;
+    color: #94a3b8;
+}
+
+.feedback-cell {
+    max-width: 300px;
+    word-wrap: break-word;
+    color: #475569;
+}
+
+.score-badge {
+    display: inline-block;
+    padding: 0.15rem 0.6rem;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+    .score-badge.high {
+        background: #dcfce7;
+        color: #16a34a;
+    }
+
+    .score-badge.medium {
+        background: #fef3c7;
+        color: #d97706;
+    }
+
+    .score-badge.low {
+        background: #fee2e2;
+        color: #dc2626;
+    }
+
+.no-data,
+.no-report {
+    text-align: center;
+    padding: 2rem;
+    color: #6b7280;
+}
+
+.no-report-sub {
+    font-size: 0.85rem;
+    color: #94a3b8;
+}
+
+/* Unauthorized */
+.unauthorized {
+    text-align: center;
+    padding: 4rem 2rem;
+}
+
+    .unauthorized h2 {
+        font-size: 2rem;
+        color: #ef4444;
+    }
+
+    .unauthorized p {
+        color: #6b7280;
+    }
+
+/* Responsive */
+@media (max-width: 768px) {
+    .reports-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+
+    .summary-cards {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .table-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.75rem;
+    }
+
+    .table-actions {
+        width: 100%;
+    }
+
+    .btn-download-pdf,
+    .btn-export-csv {
+        flex: 1;
+        text-align: center;
+    }
+
+    .round-selector {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
+
+@media (max-width: 480px) {
+    .summary-cards {
+        grid-template-columns: 1fr;
+    }
+
+    .performer-item {
+        flex-wrap: wrap;
+    }
+
+    .evaluation-table {
+        font-size: 0.8rem;
+    }
+
+        .evaluation-table th,
+        .evaluation-table td {
+            padding: 0.4rem 0.5rem;
+        }
+}
+/* src/pages/ReportsPage.css */
+
+.reports-page {
+    padding: 1.5rem;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.reports-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+}
+
+    .reports-header h2 {
+        font-size: 1.8rem;
+        color: #1e293b;
+        margin: 0;
+    }
+
+    .reports-header p {
+        color: #6b7280;
+        margin: 0.25rem 0 0 0;
+    }
+
+.error-banner {
+    background: #fee2e2;
+    color: #dc2626;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    border: 1px solid #fecaca;
+}
+
+/* Round Selector */
+.round-selector {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+    .round-selector label {
+        font-weight: 500;
+        color: #374151;
+    }
+
+    .round-selector select {
+        padding: 0.5rem 1rem;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        font-size: 1rem;
+        background: white;
+        min-width: 200px;
+    }
+
+        .round-selector select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+.loading-state {
+    text-align: center;
+    padding: 3rem;
+    color: #6b7280;
+}
+
+/* Summary Cards */
+.summary-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.summary-card {
+    background: white;
+    padding: 1rem 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    text-align: center;
+}
+
+    .summary-card .summary-label {
+        display: block;
+        font-size: 0.8rem;
+        color: #6b7280;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .summary-card .summary-value {
+        display: block;
+        font-size: 2rem;
+        font-weight: 700;
+        color: #1e293b;
+        margin-top: 0.25rem;
+    }
+
+    .summary-card.green .summary-value {
+        color: #22c55e;
+    }
+
+    .summary-card.yellow .summary-value {
+        color: #f59e0b;
+    }
+
+    .summary-card.blue .summary-value {
+        color: #3b82f6;
+    }
+
+    .summary-card.purple .summary-value {
+        color: #8b5cf6;
+    }
+
+/* Top Performers */
+.top-performers {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    margin-bottom: 1.5rem;
+}
+
+    .top-performers h3 {
+        margin: 0 0 1rem 0;
+        font-size: 1.2rem;
+        color: #1e293b;
+    }
+
+.performer-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.performer-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.5rem 0.75rem;
+    background: #f8fafc;
+    border-radius: 6px;
+}
+
+.performer-rank {
+    font-weight: 700;
+    color: #3b82f6;
+    min-width: 40px;
+}
+
+.performer-info {
+    flex: 1;
+}
+
+.performer-title {
+    font-weight: 500;
+    color: #1e293b;
+}
+
+.performer-team {
+    font-size: 0.8rem;
+    color: #6b7280;
+    margin-left: 0.5rem;
+}
+
+.performer-score {
+    font-weight: 700;
+    color: #22c55e;
+}
+
+/* Evaluation Table */
+.evaluation-table-section {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.table-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+    .table-header h3 {
+        margin: 0;
+        font-size: 1.2rem;
+        color: #1e293b;
+    }
+
+.table-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.btn-download-pdf,
+.btn-export-csv {
+    padding: 0.4rem 1rem;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.btn-download-pdf {
+    background: #3b82f6;
+    color: white;
+}
+
+    .btn-download-pdf:hover:not(:disabled) {
+        background: #2563eb;
+    }
+
+    .btn-download-pdf:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+.btn-export-csv {
+    background: #22c55e;
+    color: white;
+}
+
+    .btn-export-csv:hover {
+        background: #16a34a;
+    }
+
+.table-responsive {
+    overflow-x: auto;
+}
+
+.evaluation-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+    .evaluation-table thead {
+        background: #f1f5f9;
+    }
+
+    .evaluation-table th {
+        padding: 0.6rem 0.75rem;
+        text-align: left;
+        font-weight: 600;
+        color: #475569;
+        border-bottom: 2px solid #e5e7eb;
+    }
+
+    .evaluation-table td {
+        padding: 0.6rem 0.75rem;
+        border-bottom: 1px solid #e5e7eb;
+        vertical-align: middle;
+    }
+
+    .evaluation-table tbody tr:hover {
+        background: #f8fafc;
+    }
+
+.project-cell {
+    display: flex;
+    flex-direction: column;
+}
+
+.project-title {
+    font-weight: 500;
+    color: #1e293b;
+}
+
+.project-id {
+    font-size: 0.7rem;
+    color: #94a3b8;
+}
+
+.feedback-cell {
+    max-width: 300px;
+    word-wrap: break-word;
+    color: #475569;
+}
+
+.score-badge {
+    display: inline-block;
+    padding: 0.15rem 0.6rem;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+    .score-badge.high {
+        background: #dcfce7;
+        color: #16a34a;
+    }
+
+    .score-badge.medium {
+        background: #fef3c7;
+        color: #d97706;
+    }
+
+    .score-badge.low {
+        background: #fee2e2;
+        color: #dc2626;
+    }
+
+.no-data,
+.no-report {
+    text-align: center;
+    padding: 2rem;
+    color: #6b7280;
+}
+
+.no-report-sub {
+    font-size: 0.85rem;
+    color: #94a3b8;
+}
+
+/* Unauthorized */
+.unauthorized {
+    text-align: center;
+    padding: 4rem 2rem;
+}
+
+    .unauthorized h2 {
+        font-size: 2rem;
+        color: #ef4444;
+    }
+
+    .unauthorized p {
+        color: #6b7280;
+    }
+
+/* Responsive */
+@media (max-width: 768px) {
+    .reports-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+
+    .summary-cards {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .table-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.75rem;
+    }
+
+    .table-actions {
+        width: 100%;
+    }
+
+    .btn-download-pdf,
+    .btn-export-csv {
+        flex: 1;
+        text-align: center;
+    }
+
+    .round-selector {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
+
+@media (max-width: 480px) {
+    .summary-cards {
+        grid-template-columns: 1fr;
+    }
+
+    .performer-item {
+        flex-wrap: wrap;
+    }
+
+    .evaluation-table {
+        font-size: 0.8rem;
+    }
+
+        .evaluation-table th,
+        .evaluation-table td {
+            padding: 0.4rem 0.5rem;
+        }
+}

@@ -7,7 +7,7 @@ interface SubmissionItem {
     id: string;
     version: number;
     fileName: string;
-    storedName: string;      // ← The actual filename on server (from FileUrl)
+    storedName: string;
     fileUrl: string;
     submittedAt: string;
     submittedBy: string;
@@ -28,57 +28,105 @@ interface BackendSubmission {
     status?: string;
 }
 
+interface Project {
+    id: string;
+    title: string;
+    teamId: string;
+    teamLeaderId?: string;
+    lecturerId: string;
+    status: string;
+    roundId?: string;
+}
+
 export default function SubmissionsPage() {
     const role = localStorage.getItem('role');
+    const userId = localStorage.getItem('userId') || '';
     const [projectId, setProjectId] = useState<string>('');
     const [submissions, setSubmissions] = useState<SubmissionItem[]>([]);
+    const [projects, setProjects] = useState<Project[]>([]);
+    const [selectedProjectId, setSelectedProjectId] = useState<string>('');
     const [isLoading, setIsLoading] = useState(true);
     const [errorMsg, setErrorMsg] = useState('');
     const [isUploading, setIsUploading] = useState(false);
 
-    // Lecturer state
-    const [selectedGroup, setSelectedGroup] = useState('Group 6 - Microservices E-Commerce');
+    // Lecturer evaluation state
     const [gradeScore, setGradeScore] = useState('');
     const [evaluationFeedback, setEvaluationFeedback] = useState('');
+    const [isSubmittingEval, setIsSubmittingEval] = useState(false);
 
-    // --- LOAD SUBMISSIONS ---
+    // --- LOAD DATA ---
     useEffect(() => {
-        const loadSubmissions = async () => {
+        const loadData = async () => {
             try {
-                const projects = await api.getProjects();
-                if (projects && projects.length > 0) {
-                    const project = projects[0];
-                    setProjectId(project.id);
+                setIsLoading(true);
+                setErrorMsg('');
 
-                    const data = await api.getSubmissions(project.id);
+                // Get all projects
+                const projectsData = await api.getProjects();
+                setProjects(projectsData || []);
 
-                    const mappedSubmissions: SubmissionItem[] = data.map((sub: BackendSubmission) => ({
-                        id: sub.id,
-                        projectId: project.id,
-                        version: sub.version || 1,
-                        fileName: sub.fileName || 'unknown.pdf',
-                        // Extract stored name from FileUrl (the actual filename on server)
-                        storedName: sub.fileUrl ? sub.fileUrl.split('/').pop() || sub.fileName : sub.fileName,
-                        fileUrl: sub.fileUrl || '',
-                        submittedAt: sub.submittedAt ? new Date(sub.submittedAt).toLocaleString() : 'Unknown date',
-                        submittedBy: sub.submittedBy || 'Team Member',
-                        status: sub.status === 'Evaluated' ? 'Evaluated' : 'Pending Review',
-                    }));
+                // For Lecturer: filter projects they supervise
+                if (role === 'Lecturer') {
+                    const lecturerProjects = projectsData.filter(
+                        (p: Project) => p.lecturerId === userId
+                    );
+                    setProjects(lecturerProjects);
 
-                    setSubmissions(mappedSubmissions);
+                    if (lecturerProjects.length > 0) {
+                        setSelectedProjectId(lecturerProjects[0].id);
+                        await loadSubmissions(lecturerProjects[0].id);
+                    }
                 } else {
-                    setErrorMsg('No active project found.');
+                    // For Student: get their project
+                    const studentProject = projectsData.find(
+                        (p: Project) => p.teamLeaderId === userId
+                    );
+                    if (studentProject) {
+                        setSelectedProjectId(studentProject.id);
+                        setProjectId(studentProject.id);
+                        await loadSubmissions(studentProject.id);
+                    }
                 }
             } catch (err) {
-                console.error('Failed to load submissions:', err);
-                setErrorMsg('Could not load submissions. Please try again.');
+                console.error('Failed to load data:', err);
+                setErrorMsg('Could not load data. Please try again.');
             } finally {
                 setIsLoading(false);
             }
         };
 
-        loadSubmissions();
-    }, []);
+        loadData();
+    }, [role, userId]);
+
+    // --- LOAD SUBMISSIONS FOR A PROJECT ---
+    const loadSubmissions = async (projectId: string) => {
+        try {
+            const data = await api.getSubmissions(projectId);
+            const mappedSubmissions: SubmissionItem[] = data.map((sub: BackendSubmission) => ({
+                id: sub.id,
+                projectId: projectId,
+                version: sub.version || 1,
+                fileName: sub.fileName || 'unknown.pdf',
+                storedName: sub.fileUrl ? sub.fileUrl.split('/').pop() || sub.fileName : sub.fileName,
+                fileUrl: sub.fileUrl || '',
+                submittedAt: sub.submittedAt ? new Date(sub.submittedAt).toLocaleString() : 'Unknown date',
+                submittedBy: sub.submittedBy || 'Team Member',
+                status: sub.status === 'Evaluated' ? 'Evaluated' : 'Pending Review',
+            }));
+            setSubmissions(mappedSubmissions);
+            setProjectId(projectId);
+        } catch (err) {
+            console.error('Failed to load submissions:', err);
+            setSubmissions([]);
+        }
+    };
+
+    // --- HANDLE PROJECT SWITCH (Lecturer) ---
+    const handleProjectChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+        const newProjectId = e.target.value;
+        setSelectedProjectId(newProjectId);
+        await loadSubmissions(newProjectId);
+    };
 
     // --- UPLOAD FILE ---
     const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -126,8 +174,6 @@ export default function SubmissionsPage() {
 
         try {
             const blob = await api.downloadFile(projectId, storedName);
-
-            // Create download link
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -136,20 +182,59 @@ export default function SubmissionsPage() {
             a.click();
             document.body.removeChild(a);
             window.URL.revokeObjectURL(url);
-
-            console.log(`✅ Downloaded: ${displayName}`);
         } catch (err) {
             console.error('Download failed:', err);
-            alert('❌ Failed to download file. Please try again.');
+            alert('❌ Failed to download file.');
         }
     };
 
-    // --- LECTURER GRADE SUBMIT ---
-    const handleGradeSubmit = (e: React.FormEvent) => {
+    // --- ✅ FIXED: REAL EVALUATION SUBMIT ---
+    const handleEvaluationSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        alert(`✅ Evaluation Saved for ${selectedGroup}\nScore: ${gradeScore}/10\nFeedback committed successfully!`);
-        setGradeScore('');
-        setEvaluationFeedback('');
+
+        if (!selectedProjectId) {
+            alert('Please select a project first.');
+            return;
+        }
+
+        if (!gradeScore || !evaluationFeedback) {
+            alert('Please fill in both score and feedback.');
+            return;
+        }
+
+        setIsSubmittingEval(true);
+
+        try {
+            // Get the current round for this project
+            const project = projects.find(p => p.id === selectedProjectId);
+            const roundId = project?.roundId || 'RND-2025A'; // Fallback to default
+
+            await api.createEvaluation({
+                projectId: selectedProjectId,
+                roundId: roundId,
+                evaluatorId: userId,
+                score: parseFloat(gradeScore),
+                feedback: evaluationFeedback
+            });
+
+            alert('✅ Evaluation submitted successfully!');
+            setGradeScore('');
+            setEvaluationFeedback('');
+
+            // Refresh submissions to show updated status
+            await loadSubmissions(selectedProjectId);
+        } catch (err) {
+            console.error('Evaluation failed:', err);
+            alert('❌ Failed to submit evaluation. Please try again.');
+        } finally {
+            setIsSubmittingEval(false);
+        }
+    };
+
+    // --- GET PROJECT NAME ---
+    const getProjectName = (id: string) => {
+        const project = projects.find(p => p.id === id);
+        return project?.title || 'Unknown Project';
     };
 
     return (
@@ -224,7 +309,7 @@ export default function SubmissionsPage() {
                         {isLoading ? (
                             <p style={{ textAlign: 'center', padding: '2rem', color: '#6b7280' }}>⏳ Loading submissions...</p>
                         ) : submissions.length === 0 ? (
-                            <p style={{ textAlign: 'center', padding: '2rem', color: '#6b7280' }}>📭 No submissions yet. Upload your first artifact!</p>
+                            <p style={{ textAlign: 'center', padding: '2rem', color: '#6b7280' }}>📭 No submissions yet.</p>
                         ) : (
                             <div className="history-timeline-stack">
                                 {submissions.map((item) => (
@@ -310,20 +395,20 @@ export default function SubmissionsPage() {
                 </div>
             )}
 
-            {/* --- LECTURER VIEW --- */}
+            {/* --- ✅ FIXED: LECTURER VIEW WITH REAL DATA --- */}
             {role === 'Lecturer' && (
                 <div className="submissions-grid-container lecturer-mode" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
                     {/* Left: Student Deliverables */}
                     <div className="portal-glass-card" style={{ background: 'white', borderRadius: '12px', padding: '1.5rem', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
                         <h3 className="card-section-title">📥 Incoming Student Deliverables</h3>
                         <div className="selector-control-header">
-                            <label htmlFor="group-select" style={{ fontWeight: '500', display: 'block', marginBottom: '0.25rem' }}>
-                                Active Cohort Target:
+                            <label htmlFor="project-select" style={{ fontWeight: '500', display: 'block', marginBottom: '0.25rem' }}>
+                                Select Project:
                             </label>
                             <select
-                                id="group-select"
-                                value={selectedGroup}
-                                onChange={(e) => setSelectedGroup(e.target.value)}
+                                id="project-select"
+                                value={selectedProjectId}
+                                onChange={handleProjectChange}
                                 className="styled-form-dropdown"
                                 style={{
                                     width: '100%',
@@ -333,8 +418,15 @@ export default function SubmissionsPage() {
                                     marginBottom: '1rem'
                                 }}
                             >
-                                <option value="Group 6 - Microservices E-Commerce">Group 6 - Microservices E-Commerce App</option>
-                                <option value="Group 4 - Smart Agriculture System">Group 4 - Smart Agriculture System</option>
+                                {projects.length === 0 ? (
+                                    <option value="">No projects assigned</option>
+                                ) : (
+                                    projects.map((p) => (
+                                        <option key={p.id} value={p.id}>
+                                            {p.title} ({p.teamId})
+                                        </option>
+                                    ))
+                                )}
                             </select>
                         </div>
 
@@ -379,13 +471,27 @@ export default function SubmissionsPage() {
                         )}
                     </div>
 
-                    {/* Right: Evaluation Form */}
+                    {/* Right: ✅ REAL Evaluation Form */}
                     <div className="portal-glass-card" style={{ background: 'white', borderRadius: '12px', padding: '1.5rem', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
                         <h3 className="card-section-title">✍️ Perform Evaluation Matrix</h3>
-                        <form onSubmit={handleGradeSubmit} className="evaluation-input-form">
+
+                        {/* Show selected project name */}
+                        {selectedProjectId && (
+                            <div style={{
+                                marginBottom: '1rem',
+                                padding: '0.5rem 0.75rem',
+                                background: '#f0fdf4',
+                                borderRadius: '6px',
+                                borderLeft: '3px solid #22c55e'
+                            }}>
+                                <strong>Evaluating:</strong> {getProjectName(selectedProjectId)}
+                            </div>
+                        )}
+
+                        <form onSubmit={handleEvaluationSubmit} className="evaluation-input-form">
                             <div className="form-input-group" style={{ marginBottom: '1rem' }}>
                                 <label className="input-field-label" style={{ display: 'block', marginBottom: '0.25rem', fontWeight: '500' }}>
-                                    Quantitative Milestone Score (0.0 - 10.0)
+                                    Quantitative Milestone Score (0.0 - 10.0) *
                                 </label>
                                 <input
                                     type="number"
@@ -404,12 +510,13 @@ export default function SubmissionsPage() {
                                         border: '1px solid #d1d5db',
                                         fontSize: '1rem'
                                     }}
+                                    disabled={!selectedProjectId || isSubmittingEval}
                                 />
                             </div>
 
                             <div className="form-input-group" style={{ marginBottom: '1rem' }}>
                                 <label className="input-field-label" style={{ display: 'block', marginBottom: '0.25rem', fontWeight: '500' }}>
-                                    Qualitative Structural Critique & Feedback
+                                    Qualitative Structural Critique & Feedback *
                                 </label>
                                 <textarea
                                     rows={5}
@@ -426,6 +533,7 @@ export default function SubmissionsPage() {
                                         resize: 'vertical',
                                         fontFamily: 'inherit'
                                     }}
+                                    disabled={!selectedProjectId || isSubmittingEval}
                                 />
                             </div>
 
@@ -435,19 +543,18 @@ export default function SubmissionsPage() {
                                 style={{
                                     width: '100%',
                                     padding: '0.75rem',
-                                    background: '#22c55e',
+                                    background: isSubmittingEval || !selectedProjectId ? '#94a3b8' : '#22c55e',
                                     color: 'white',
                                     border: 'none',
                                     borderRadius: '6px',
-                                    cursor: 'pointer',
+                                    cursor: isSubmittingEval || !selectedProjectId ? 'not-allowed' : 'pointer',
                                     fontWeight: '600',
                                     fontSize: '1rem',
                                     transition: 'background 0.2s'
                                 }}
-                                onMouseEnter={(e) => e.currentTarget.style.background = '#16a34a'}
-                                onMouseLeave={(e) => e.currentTarget.style.background = '#22c55e'}
+                                disabled={isSubmittingEval || !selectedProjectId}
                             >
-                                ✅ Commit Evaluation Scores
+                                {isSubmittingEval ? '⏳ Submitting...' : '✅ Commit Evaluation Scores'}
                             </button>
                         </form>
                     </div>

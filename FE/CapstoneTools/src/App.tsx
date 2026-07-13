@@ -12,6 +12,7 @@ import SubmissionsPage from './pages/SubmissionsPage';
 import EvaluationPage from './pages/EvaluationPage';
 import CouncilDashboard from './pages/CouncilDashboard';
 import NotificationsPage from './pages/NotificationsPage';
+import ReportsPage from './pages/ReportsPage';
 
 // Client-side session and role status helper
 const getLocalUser = () => {
@@ -86,14 +87,24 @@ function App() {
                     />
                     <Route path="evaluation"
                         element={
-                            <ProtectedRoute allowedRoles={['Student', 'Admin']}>
+                            <ProtectedRoute allowedRoles={['Student', 'Admin', 'Lecturer', 'CouncilMember']}>
                                 <EvaluationPage />
-                        </ProtectedRoute>} />
+                            </ProtectedRoute>
+                        }
+                    />
                     <Route
                         path="dashboard/student"
                         element={
                             <ProtectedRoute allowedRoles={['Student']}>
                                 <StudentDashboard />
+                            </ProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="reports"
+                        element={
+                            <ProtectedRoute allowedRoles={['Lecturer']}>
+                                <ReportsPage />
                             </ProtectedRoute>
                         }
                     />

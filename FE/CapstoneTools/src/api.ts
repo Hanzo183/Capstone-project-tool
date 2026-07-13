@@ -361,7 +361,7 @@ export const api = {
     },
 
     // ============================================
-    // 📅 SCHEDULING SERVICE ENDPOINTS
+    // 📅 SCHEDULING SERVICE ENDPOINTS - FIXED
     // ============================================
 
     // Get all review rounds
@@ -391,16 +391,24 @@ export const api = {
     // Get single review round
     getReviewRound: async (roundId: string) => {
         const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE_URL}/rounds/${roundId}`, {
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
+        try {
+            const response = await fetch(`${API_BASE_URL}/rounds/${roundId}`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            if (!response.ok) {
+                if (response.status === 404) {
+                    return null;
+                }
+                throw new Error('Failed to fetch review round');
             }
-        });
-        if (!response.ok) {
-            throw new Error('Failed to fetch review round');
+            return response.json();
+        } catch (err) {
+            console.error('getReviewRound error:', err);
+            return null;
         }
-        return response.json();
     },
 
     // Create review round (Admin only)
@@ -426,37 +434,55 @@ export const api = {
         return response.json();
     },
 
-    // Get slots for a round
+    // ✅ FIXED: Get schedule for a round
     getSlotsByRound: async (roundId: string) => {
         const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE_URL}/rounds/${roundId}/slots`, {
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
+        try {
+            const response = await fetch(`${API_BASE_URL}/rounds/${roundId}/schedule`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            if (!response.ok) {
+                if (response.status === 404) {
+                    console.warn('No schedule found for round:', roundId);
+                    return [];
+                }
+                throw new Error('Failed to fetch schedule');
             }
-        });
-        if (!response.ok) {
-            throw new Error('Failed to fetch slots');
+            return response.json();
+        } catch (err) {
+            console.error('getSlotsByRound error:', err);
+            return [];
         }
-        return response.json();
     },
 
-    // Get all slots
+    // ✅ FIXED: Get calendar view
     getScheduleSlots: async () => {
         const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE_URL}/slots`, {
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
+        try {
+            const response = await fetch(`${API_BASE_URL}/schedule/calendar`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            if (!response.ok) {
+                if (response.status === 404) {
+                    console.warn('Calendar endpoint not found, returning empty array');
+                    return [];
+                }
+                throw new Error('Failed to fetch schedule calendar');
             }
-        });
-        if (!response.ok) {
-            throw new Error('Failed to fetch schedule slots');
+            return response.json();
+        } catch (err) {
+            console.error('getScheduleSlots error:', err);
+            return [];
         }
-        return response.json();
     },
 
-    // Create schedule slot (Admin only)
+    // ✅ FIXED: Assign a schedule slot
     createScheduleSlot: async (slotData: {
         roundId: string;
         projectId: string;
@@ -466,7 +492,7 @@ export const api = {
         reviewerIds?: string[];
     }) => {
         const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE_URL}/slots`, {
+        const response = await fetch(`${API_BASE_URL}/schedule/assign`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${token}`,
@@ -475,7 +501,40 @@ export const api = {
             body: JSON.stringify(slotData)
         });
         if (!response.ok) {
-            throw new Error('Failed to create schedule slot');
+            const error = await response.json();
+            throw new Error(error.message || 'Failed to assign schedule slot');
+        }
+        return response.json();
+    },
+
+    // ✅ NEW: Trigger reminders
+    triggerReminders: async () => {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/schedule/jobs/readline-reminders`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        if (!response.ok) {
+            throw new Error('Failed to trigger reminders');
+        }
+        return response.json();
+    },
+
+    // ✅ NEW: Update round status
+    updateRoundStatus: async () => {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/schedule/jobs/round-status`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        if (!response.ok) {
+            throw new Error('Failed to update round status');
         }
         return response.json();
     },
@@ -622,29 +681,44 @@ export const api = {
     },
 
     // ============================================
-    // 🔔 NOTIFICATION SERVICE ENDPOINTS
+    // 🔔 NOTIFICATION SERVICE ENDPOINTS - FIXED
     // ============================================
 
-    // Get notifications for current user
+    // ✅ FIXED: Get notifications for a specific user
     getNotifications: async () => {
         const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE_URL}/notifications`, {
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            }
-        });
-        if (!response.ok) {
-            throw new Error('Failed to fetch notifications');
+        const userId = localStorage.getItem('userId');
+
+        if (!userId) {
+            console.warn('No userId found, cannot fetch notifications');
+            return [];
         }
-        return response.json();
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/notifications/${userId}`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            if (!response.ok) {
+                if (response.status === 404) {
+                    return [];
+                }
+                throw new Error('Failed to fetch notifications');
+            }
+            return response.json();
+        } catch  {
+            console.error('getNotifications error');
+            return [];
+        }
     },
 
-    // Mark notification as read
+    // ✅ FIXED: Mark notification as read (PUT not PATCH)
     markNotificationRead: async (notificationId: string) => {
         const token = localStorage.getItem('token');
         const response = await fetch(`${API_BASE_URL}/notifications/${notificationId}/read`, {
-            method: 'PATCH',
+            method: 'PUT',
             headers: {
                 'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json'
@@ -656,44 +730,64 @@ export const api = {
         return response.json();
     },
 
-    // Mark all notifications as read
+    // ✅ FIXED: Mark all as read (fetch and mark individually)
     markAllNotificationsRead: async () => {
-        const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE_URL}/notifications/read-all`, {
-            method: 'PATCH',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            }
-        });
-        if (!response.ok) {
+        try {
+            const notifications = await api.getNotifications();
+            const promises = notifications.map((n: { id: string }) =>
+                api.markNotificationRead(n.id).catch(() => ({}))
+            );
+            await Promise.all(promises);
+            return { success: true };
+        } catch  {
+            console.error('Failed to mark all as read');
             throw new Error('Failed to mark all notifications as read');
         }
-        return response.json();
     },
 
-    // Get notification preferences
+    // ✅ FIXED: Get notification preferences with userId
     getNotificationPreferences: async () => {
         const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE_URL}/notifications/preferences`, {
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            }
-        });
-        if (!response.ok) {
-            throw new Error('Failed to fetch notification preferences');
+        const userId = localStorage.getItem('userId');
+
+        if (!userId) {
+            console.warn('No userId found, cannot fetch preferences');
+            return { emailEnabled: true, inAppEnabled: true };
         }
-        return response.json();
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/notifications/preferences/${userId}`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            if (!response.ok) {
+                if (response.status === 404) {
+                    return { emailEnabled: true, inAppEnabled: true };
+                }
+                throw new Error('Failed to fetch notification preferences');
+            }
+            return response.json();
+        } catch  {
+            console.error('getNotificationPreferences error');
+            return { emailEnabled: true, inAppEnabled: true };
+        }
     },
 
-    // Update notification preferences
+    // ✅ FIXED: Update notification preferences with userId
     updateNotificationPreferences: async (preferences: {
         emailEnabled: boolean;
         inAppEnabled: boolean;
     }) => {
         const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE_URL}/notifications/preferences`, {
+        const userId = localStorage.getItem('userId');
+
+        if (!userId) {
+            throw new Error('No userId found');
+        }
+
+        const response = await fetch(`${API_BASE_URL}/notifications/preferences/${userId}`, {
             method: 'PUT',
             headers: {
                 'Authorization': `Bearer ${token}`,
@@ -705,5 +799,27 @@ export const api = {
             throw new Error('Failed to update notification preferences');
         }
         return response.json();
-    }
+    },
+
+    // ✅ NEW: Create notification (Admin/System)
+    createNotification: async (notificationData: {
+        userId: string;
+        title: string;
+        body: string;
+        type: string;
+    }) => {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/notify`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(notificationData)
+        });
+        if (!response.ok) {
+            throw new Error('Failed to create notification');
+        }
+        return response.json();
+    },
 };
