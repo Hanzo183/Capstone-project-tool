@@ -4,9 +4,10 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using RabbitMQ.Client;
+using Confluent.Kafka;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors(options =>
@@ -66,6 +67,17 @@ builder.Services.AddDbContext<IdentityDbContext>(options =>
 builder.Services.AddSingleton<IntegrationEventPublisher>();
 
 var app = builder.Build();
+app.UseExceptionHandler(exceptionApp =>
+{
+    exceptionApp.Run(async context =>
+    {
+        var feature = context.Features.Get<IExceptionHandlerFeature>();
+        var logger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("GlobalExceptionHandler");
+        logger.LogError(feature?.Error, "Unhandled IdentityService exception.");
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        await context.Response.WriteAsJsonAsync(new { message = "An unexpected identity service error occurred." });
+    });
+});
 app.UseCors();
 app.UseSwagger();
 app.UseSwaggerUI();
@@ -293,14 +305,35 @@ app.MapPost("/auth/reset-password", async (ResetPasswordRequest request, Identit
     return Results.Ok(new { message = "Password has been reset. Please sign in again." });
 });
 
-app.MapGet("/users", async (IdentityDbContext db) =>
+app.MapGet("/users", async (string? search, string? role, string? sortBy, string? sortDir, int? page, int? pageSize, IdentityDbContext db) =>
 {
-    var users = await db.Users
-        .AsNoTracking()
-        .OrderBy(user => user.FullName)
+    var paging = Paging.Normalize(page, pageSize);
+    var query = db.Users.AsNoTracking();
+
+    if (!string.IsNullOrWhiteSpace(search))
+    {
+        var term = search.Trim();
+        query = query.Where(user =>
+            user.FullName.Contains(term) ||
+            user.Email.Contains(term) ||
+            user.Id.Contains(term) ||
+            (user.StudentId != null && user.StudentId.Contains(term)));
+    }
+
+    if (!string.IsNullOrWhiteSpace(role))
+    {
+        var normalizedRole = NormalizeRole(role);
+        query = query.Where(user => user.Role == normalizedRole);
+    }
+
+    var totalCount = await query.CountAsync();
+    query = UserSorting.Apply(query, sortBy, sortDir);
+    var users = await query
+        .Skip((paging.Page - 1) * paging.PageSize)
+        .Take(paging.PageSize)
         .ToListAsync();
 
-    return Results.Ok(users.Select(ToUserResponse));
+    return Results.Ok(new PagedResult<UserResponse>(users.Select(ToUserResponse).ToList(), paging.Page, paging.PageSize, totalCount));
 }).RequireAuthorization("AdminOnly");
 
 app.MapGet("/users/{id}", async (string id, IdentityDbContext db) =>
@@ -340,6 +373,24 @@ app.MapPut("/users/{id}/status", async (string id, UpdateStatusRequest request, 
     await db.SaveChangesAsync();
 
     return Results.Ok(ToUserResponse(user));
+}).RequireAuthorization("AdminOnly");
+
+app.MapDelete("/users/{id}", async (string id, IdentityDbContext db) =>
+{
+    var user = await db.Users.FirstOrDefaultAsync(candidate => candidate.Id == id);
+    if (user is null)
+    {
+        return Results.NotFound();
+    }
+
+    var refreshTokens = await db.RefreshTokens.Where(token => token.UserId == id).ToListAsync();
+    var resetTokens = await db.PasswordResetTokens.Where(token => token.UserId == id).ToListAsync();
+    db.RefreshTokens.RemoveRange(refreshTokens);
+    db.PasswordResetTokens.RemoveRange(resetTokens);
+    db.Users.Remove(user);
+    await db.SaveChangesAsync();
+
+    return Results.NoContent();
 }).RequireAuthorization("AdminOnly");
 
 app.Run();
@@ -543,38 +594,46 @@ static class ShortId
 
 sealed class IntegrationEventPublisher(IConfiguration configuration, ILogger<IntegrationEventPublisher> logger)
 {
-    private readonly string exchangeName = configuration["RabbitMQ:ExchangeName"] ?? "capstone.events";
-
-    public Task PublishAsync(string eventName, object payload)
+    public async Task PublishAsync(string eventName, object payload)
     {
         try
         {
-            var factory = new ConnectionFactory
+            var config = new ProducerConfig
             {
-                HostName = configuration["RabbitMQ:HostName"] ?? "localhost",
-                Port = int.TryParse(configuration["RabbitMQ:Port"], out var port) ? port : 5672,
-                UserName = configuration["RabbitMQ:UserName"] ?? "guest",
-                Password = configuration["RabbitMQ:Password"] ?? "guest",
-                DispatchConsumersAsync = true
+                BootstrapServers = configuration["Kafka:BootstrapServers"] ?? "localhost:9092",
+                Acks = Acks.All
             };
-            using var connection = factory.CreateConnection();
-            using var channel = connection.CreateModel();
-            channel.ExchangeDeclare(exchangeName, ExchangeType.Topic, durable: true, autoDelete: false);
-
-            var envelope = JsonSerializer.SerializeToUtf8Bytes(new IntegrationEvent(eventName, DateTime.UtcNow, payload));
-            var properties = channel.CreateBasicProperties();
-            properties.Persistent = true;
-            properties.ContentType = "application/json";
-            properties.Type = eventName;
-
-            channel.BasicPublish(exchangeName, eventName, properties, envelope);
+            using var producer = new ProducerBuilder<string, string>(config).Build();
+            var envelope = JsonSerializer.Serialize(new IntegrationEvent(eventName, DateTime.UtcNow, payload));
+            await producer.ProduceAsync(eventName, new Message<string, string>
+            {
+                Key = eventName,
+                Value = envelope
+            });
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Could not publish integration event {EventName}.", eventName);
+            logger.LogWarning(ex, "Could not publish Kafka integration event {EventName}.", eventName);
         }
+    }
+}
 
-        return Task.CompletedTask;
+static class UserSorting
+{
+    public static IQueryable<UserAccount> Apply(IQueryable<UserAccount> query, string? sortBy, string? sortDir)
+    {
+        var descending = string.Equals(sortDir, "desc", StringComparison.OrdinalIgnoreCase);
+        return ((sortBy ?? "name").Trim().ToLowerInvariant(), descending) switch
+        {
+            ("email", false) => query.OrderBy(user => user.Email),
+            ("email", true) => query.OrderByDescending(user => user.Email),
+            ("role", false) => query.OrderBy(user => user.Role),
+            ("role", true) => query.OrderByDescending(user => user.Role),
+            ("created", false) => query.OrderBy(user => user.CreatedAt),
+            ("created", true) => query.OrderByDescending(user => user.CreatedAt),
+            ("name", true) => query.OrderByDescending(user => user.FullName),
+            _ => query.OrderBy(user => user.FullName)
+        };
     }
 }
 
@@ -590,3 +649,13 @@ record UpdateRoleRequest(string Role);
 record UpdateStatusRequest(bool IsActive);
 record UserResponse(string Id, string? StudentId, string FullName, string Email, string Role, bool IsActive, DateTime CreatedAt);
 record AuthResponse(string AccessToken, string RefreshToken, DateTime ExpiresAt, UserResponse User);
+record Paging(int Page, int PageSize)
+{
+    public static Paging Normalize(int? page, int? pageSize) =>
+        new(Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 20, 1, 100));
+}
+
+record PagedResult<T>(IReadOnlyList<T> Items, int Page, int PageSize, int TotalCount)
+{
+    public int TotalPages => TotalCount == 0 ? 0 : (int)Math.Ceiling(TotalCount / (double)PageSize);
+}

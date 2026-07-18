@@ -2,11 +2,11 @@ using System.Security.Cryptography;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using Confluent.Kafka;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using RabbitMQ.Client;
-using RabbitMQ.Client.Events;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors(options =>
@@ -63,9 +63,20 @@ builder.Services.AddAuthorization(options =>
 });
 builder.Services.AddDbContext<NotificationDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
-builder.Services.AddHostedService<RabbitMqNotificationConsumer>();
+builder.Services.AddHostedService<KafkaNotificationConsumer>();
 
 var app = builder.Build();
+app.UseExceptionHandler(exceptionApp =>
+{
+    exceptionApp.Run(async context =>
+    {
+        var feature = context.Features.Get<IExceptionHandlerFeature>();
+        var logger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("GlobalExceptionHandler");
+        logger.LogError(feature?.Error, "Unhandled NotificationService exception.");
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        await context.Response.WriteAsJsonAsync(new { message = "An unexpected notification service error occurred." });
+    });
+});
 app.UseCors();
 app.UseSwagger();
 app.UseSwaggerUI();
@@ -78,15 +89,31 @@ app.MapGet("/health", async (NotificationDbContext db) =>
     return Results.Ok(new { service = "notification", status = canConnect ? "healthy" : "database-unavailable" });
 });
 
-app.MapGet("/notifications/{userId}", async (string userId, NotificationDbContext db) =>
+app.MapGet("/notifications/{userId}", async (string userId, string? type, bool? unreadOnly, int? page, int? pageSize, NotificationDbContext db) =>
 {
-    var userNotifications = await db.Notifications
+    var paging = Paging.Normalize(page, pageSize);
+    var query = db.Notifications
         .AsNoTracking()
-        .Where(item => item.UserId == userId)
+        .Where(item => item.UserId == userId);
+
+    if (!string.IsNullOrWhiteSpace(type))
+    {
+        query = query.Where(item => item.Type == type);
+    }
+
+    if (unreadOnly == true)
+    {
+        query = query.Where(item => !item.IsRead);
+    }
+
+    var totalCount = await query.CountAsync();
+    var userNotifications = await query
         .OrderByDescending(item => item.CreatedAt)
+        .Skip((paging.Page - 1) * paging.PageSize)
+        .Take(paging.PageSize)
         .ToListAsync();
 
-    return Results.Ok(userNotifications);
+    return Results.Ok(new PagedResult<NotificationItem>(userNotifications, paging.Page, paging.PageSize, totalCount));
 }).RequireAuthorization("Authenticated");
 
 app.MapPut("/notifications/{id}/read", async (string id, NotificationDbContext db) =>
@@ -101,6 +128,43 @@ app.MapPut("/notifications/{id}/read", async (string id, NotificationDbContext d
     await db.SaveChangesAsync();
 
     return Results.Ok(notification);
+}).RequireAuthorization("Authenticated");
+
+app.MapPut("/notifications/{id}", async (string id, UpdateNotificationRequest request, NotificationDbContext db) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Title) ||
+        string.IsNullOrWhiteSpace(request.Body) ||
+        string.IsNullOrWhiteSpace(request.Type))
+    {
+        return Results.BadRequest(new { message = "Title, body, and type are required." });
+    }
+
+    var notification = await db.Notifications.FirstOrDefaultAsync(item => item.Id == id);
+    if (notification is null)
+    {
+        return Results.NotFound();
+    }
+
+    notification.Title = request.Title.Trim();
+    notification.Body = request.Body.Trim();
+    notification.Type = request.Type.Trim();
+    notification.IsRead = request.IsRead;
+    await db.SaveChangesAsync();
+
+    return Results.Ok(notification);
+}).RequireAuthorization("ReviewStaff");
+
+app.MapDelete("/notifications/{id}", async (string id, NotificationDbContext db) =>
+{
+    var notification = await db.Notifications.FirstOrDefaultAsync(item => item.Id == id);
+    if (notification is null)
+    {
+        return Results.NotFound();
+    }
+
+    db.Notifications.Remove(notification);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
 }).RequireAuthorization("Authenticated");
 
 app.MapGet("/notifications/preferences/{userId}", async (string userId, NotificationDbContext db) =>
@@ -197,68 +261,56 @@ sealed class NotificationPreference
     public static NotificationPreference Default(string userId) => new() { UserId = userId };
 }
 
-sealed class RabbitMqNotificationConsumer(
+sealed class KafkaNotificationConsumer(
     IConfiguration configuration,
     IServiceScopeFactory scopeFactory,
-    ILogger<RabbitMqNotificationConsumer> logger) : BackgroundService
+    ILogger<KafkaNotificationConsumer> logger) : BackgroundService
 {
-    private readonly string exchangeName = configuration["RabbitMQ:ExchangeName"] ?? "capstone.events";
-    private readonly string queueName = configuration["RabbitMQ:NotificationQueue"] ?? "notification-service";
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                var factory = new ConnectionFactory
+                var consumerConfig = new ConsumerConfig
                 {
-                    HostName = configuration["RabbitMQ:HostName"] ?? "localhost",
-                    Port = int.TryParse(configuration["RabbitMQ:Port"], out var port) ? port : 5672,
-                    UserName = configuration["RabbitMQ:UserName"] ?? "guest",
-                    Password = configuration["RabbitMQ:Password"] ?? "guest",
-                    DispatchConsumersAsync = true
+                    BootstrapServers = configuration["Kafka:BootstrapServers"] ?? "localhost:9092",
+                    GroupId = configuration["Kafka:GroupId"] ?? "notification-service",
+                    AutoOffsetReset = AutoOffsetReset.Earliest,
+                    EnableAutoCommit = false
                 };
 
-                using var connection = factory.CreateConnection();
-                using var channel = connection.CreateModel();
-                channel.ExchangeDeclare(exchangeName, ExchangeType.Topic, durable: true, autoDelete: false);
-                channel.QueueDeclare(queueName, durable: true, exclusive: false, autoDelete: false);
+                using var consumer = new ConsumerBuilder<string, string>(consumerConfig).Build();
+                consumer.Subscribe(NotificationFactory.SupportedEvents);
+                logger.LogInformation("NotificationService consuming Kafka topics: {Topics}.", string.Join(", ", NotificationFactory.SupportedEvents));
 
-                foreach (var routingKey in NotificationFactory.SupportedEvents)
-                {
-                    channel.QueueBind(queueName, exchangeName, routingKey);
-                }
-
-                var consumer = new AsyncEventingBasicConsumer(channel);
-                consumer.Received += async (_, args) =>
+                while (!stoppingToken.IsCancellationRequested)
                 {
                     try
                     {
-                        var json = Encoding.UTF8.GetString(args.Body.ToArray());
-                        var integrationEvent = JsonSerializer.Deserialize<IntegrationEventEnvelope>(json, new JsonSerializerOptions
+                        var result = consumer.Consume(stoppingToken);
+                        var integrationEvent = JsonSerializer.Deserialize<IntegrationEventEnvelope>(result.Message.Value, new JsonSerializerOptions
                         {
                             PropertyNameCaseInsensitive = true
                         });
                         if (integrationEvent is null)
                         {
-                            channel.BasicAck(args.DeliveryTag, multiple: false);
-                            return;
+                            consumer.Commit(result);
+                            continue;
                         }
 
                         await PersistNotificationsAsync(integrationEvent, stoppingToken);
-                        channel.BasicAck(args.DeliveryTag, multiple: false);
+                        consumer.Commit(result);
+                    }
+                    catch (ConsumeException ex)
+                    {
+                        logger.LogWarning(ex, "Kafka consume error in NotificationService.");
                     }
                     catch (Exception ex)
                     {
-                        logger.LogError(ex, "Failed to process notification integration event.");
-                        channel.BasicNack(args.DeliveryTag, multiple: false, requeue: true);
+                        logger.LogError(ex, "Failed to process Kafka notification integration event.");
                     }
-                };
-
-                channel.BasicConsume(queueName, autoAck: false, consumer);
-                logger.LogInformation("NotificationService consuming RabbitMQ queue {QueueName}.", queueName);
-                await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -266,7 +318,7 @@ sealed class RabbitMqNotificationConsumer(
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "RabbitMQ notification consumer disconnected. Retrying soon.");
+                logger.LogWarning(ex, "Kafka notification consumer disconnected. Retrying soon.");
                 await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
             }
         }
@@ -312,7 +364,9 @@ static class NotificationFactory
     [
         "project.submitted",
         "schedule.created",
+        "schedule.updated",
         "evaluation.completed",
+        "evaluation.updated",
         "deadline.reminder",
         "user.registered",
         "rebuttal.submitted",
@@ -399,5 +453,16 @@ static class ShortId
 }
 
 record CreateNotificationRequest(string UserId, string Title, string Body, string Type);
+record UpdateNotificationRequest(string Title, string Body, string Type, bool IsRead);
 record UpdateNotificationPreferenceRequest(bool EmailEnabled, bool InAppEnabled);
 record IntegrationEventEnvelope(string Name, DateTime OccurredAt, JsonElement Payload);
+record Paging(int Page, int PageSize)
+{
+    public static Paging Normalize(int? page, int? pageSize) =>
+        new(Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 20, 1, 100));
+}
+
+record PagedResult<T>(IReadOnlyList<T> Items, int Page, int PageSize, int TotalCount)
+{
+    public int TotalPages => TotalCount == 0 ? 0 : (int)Math.Ceiling(TotalCount / (double)PageSize);
+}

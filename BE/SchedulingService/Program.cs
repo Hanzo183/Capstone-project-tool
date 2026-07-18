@@ -6,9 +6,10 @@ using Hangfire;
 using Hangfire.Dashboard;
 using Hangfire.SqlServer;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using RabbitMQ.Client;
+using Confluent.Kafka;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors(options =>
@@ -82,6 +83,17 @@ builder.Services.AddHangfire(configuration => configuration
 builder.Services.AddHangfireServer();
 
 var app = builder.Build();
+app.UseExceptionHandler(exceptionApp =>
+{
+    exceptionApp.Run(async context =>
+    {
+        var feature = context.Features.Get<IExceptionHandlerFeature>();
+        var logger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("GlobalExceptionHandler");
+        logger.LogError(feature?.Error, "Unhandled SchedulingService exception.");
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        await context.Response.WriteAsJsonAsync(new { message = "An unexpected scheduling service error occurred." });
+    });
+});
 app.UseCors();
 app.UseSwagger();
 app.UseSwaggerUI();
@@ -142,15 +154,83 @@ app.MapPost("/rounds", async (CreateRoundRequest request, SchedulingDbContext db
     return Results.Created($"/rounds/{round.Id}", round);
 }).RequireAuthorization("AdminOnly");
 
-app.MapGet("/rounds", async (SchedulingDbContext db) =>
+app.MapGet("/rounds", async (string? status, string? search, string? sortBy, string? sortDir, int? page, int? pageSize, SchedulingDbContext db) =>
 {
-    var rounds = await db.ReviewRounds
-        .AsNoTracking()
-        .OrderBy(round => round.StartDate)
+    var paging = Paging.Normalize(page, pageSize);
+    var query = db.ReviewRounds.AsNoTracking();
+
+    if (!string.IsNullOrWhiteSpace(status))
+    {
+        query = query.Where(round => round.Status == status);
+    }
+
+    if (!string.IsNullOrWhiteSpace(search))
+    {
+        var term = search.Trim();
+        query = query.Where(round => round.Name.Contains(term) || round.Id.Contains(term));
+    }
+
+    var totalCount = await query.CountAsync();
+    query = RoundHelpers.ApplySort(query, sortBy, sortDir);
+    var rounds = await query
+        .Skip((paging.Page - 1) * paging.PageSize)
+        .Take(paging.PageSize)
         .ToListAsync();
 
-    return Results.Ok(rounds);
+    return Results.Ok(new PagedResult<ReviewRound>(rounds, paging.Page, paging.PageSize, totalCount));
 }).RequireAuthorization("Authenticated");
+
+app.MapGet("/rounds/{id}", async (string id, SchedulingDbContext db) =>
+{
+    var round = await db.ReviewRounds.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id);
+    return round is null ? Results.NotFound() : Results.Ok(round);
+}).RequireAuthorization("Authenticated");
+
+app.MapPut("/rounds/{id}", async (string id, UpdateRoundRequest request, SchedulingDbContext db) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Name))
+    {
+        return Results.BadRequest(new { message = "Round name is required." });
+    }
+
+    if (request.EndDate < request.StartDate)
+    {
+        return Results.BadRequest(new { message = "End date must be on or after start date." });
+    }
+
+    var round = await db.ReviewRounds.FirstOrDefaultAsync(candidate => candidate.Id == id);
+    if (round is null)
+    {
+        return Results.NotFound();
+    }
+
+    round.Name = request.Name.Trim();
+    round.StartDate = request.StartDate;
+    round.EndDate = request.EndDate;
+    round.Status = RoundHelpers.NormalizeStatus(request.Status, request.StartDate, request.EndDate);
+    await db.SaveChangesAsync();
+
+    return Results.Ok(round);
+}).RequireAuthorization("AdminOnly");
+
+app.MapDelete("/rounds/{id}", async (string id, SchedulingDbContext db) =>
+{
+    var round = await db.ReviewRounds.FirstOrDefaultAsync(candidate => candidate.Id == id);
+    if (round is null)
+    {
+        return Results.NotFound();
+    }
+
+    var slots = await db.ScheduleSlots.Where(slot => slot.RoundId == id).ToListAsync();
+    var slotIds = slots.Select(slot => slot.Id).ToList();
+    var reviewers = await db.SlotReviewers.Where(reviewer => slotIds.Contains(reviewer.SlotId)).ToListAsync();
+    db.SlotReviewers.RemoveRange(reviewers);
+    db.ScheduleSlots.RemoveRange(slots);
+    db.ReviewRounds.Remove(round);
+    await db.SaveChangesAsync();
+
+    return Results.NoContent();
+}).RequireAuthorization("AdminOnly");
 
 app.MapGet("/rounds/{id}/schedule", async (string id, SchedulingDbContext db) =>
 {
@@ -257,6 +337,85 @@ app.MapGet("/schedule/calendar", async (DateOnly? from, DateOnly? to, Scheduling
     var slots = await query.OrderBy(slot => slot.ReviewDate).ToListAsync();
     return Results.Ok(await BuildSlotResponsesAsync(slots, db));
 }).RequireAuthorization("Authenticated");
+
+app.MapGet("/schedule/{id}", async (string id, SchedulingDbContext db) =>
+{
+    var slot = await db.ScheduleSlots.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id);
+    if (slot is null)
+    {
+        return Results.NotFound();
+    }
+
+    return Results.Ok((await BuildSlotResponsesAsync([slot], db)).First());
+}).RequireAuthorization("Authenticated");
+
+app.MapPut("/schedule/{id}", async (string id, AssignSlotRequest request, SchedulingDbContext db, IntegrationEventPublisher events) =>
+{
+    if (string.IsNullOrWhiteSpace(request.RoundId) ||
+        string.IsNullOrWhiteSpace(request.ProjectId) ||
+        string.IsNullOrWhiteSpace(request.Room))
+    {
+        return Results.BadRequest(new { message = "Round, project, and room are required." });
+    }
+
+    if (request.DurationMinutes <= 0)
+    {
+        return Results.BadRequest(new { message = "Duration must be greater than 0 minutes." });
+    }
+
+    var slot = await db.ScheduleSlots.FirstOrDefaultAsync(candidate => candidate.Id == id);
+    if (slot is null)
+    {
+        return Results.NotFound();
+    }
+
+    slot.RoundId = request.RoundId.Trim();
+    slot.ProjectId = request.ProjectId.Trim();
+    slot.ReviewDate = request.ReviewDate;
+    slot.Room = request.Room.Trim();
+    slot.DurationMinutes = request.DurationMinutes;
+
+    var existingReviewers = await db.SlotReviewers.Where(reviewer => reviewer.SlotId == id).ToListAsync();
+    db.SlotReviewers.RemoveRange(existingReviewers);
+    var councilMemberIds = request.CouncilMemberIds
+        .Select(memberId => memberId.Trim())
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+    foreach (var memberId in councilMemberIds)
+    {
+        db.SlotReviewers.Add(new SlotReviewer { SlotId = slot.Id, UserId = memberId });
+    }
+
+    await db.SaveChangesAsync();
+    await events.PublishAsync("schedule.updated", new
+    {
+        slot.Id,
+        slot.RoundId,
+        slot.ProjectId,
+        slot.ReviewDate,
+        slot.Room,
+        slot.DurationMinutes,
+        councilMemberIds
+    });
+
+    return Results.Ok(new ScheduleSlotResponse(slot.Id, slot.RoundId, slot.ProjectId, slot.ReviewDate, slot.Room, slot.DurationMinutes, councilMemberIds));
+}).RequireAuthorization("AdminOnly");
+
+app.MapDelete("/schedule/{id}", async (string id, SchedulingDbContext db) =>
+{
+    var slot = await db.ScheduleSlots.FirstOrDefaultAsync(candidate => candidate.Id == id);
+    if (slot is null)
+    {
+        return Results.NotFound();
+    }
+
+    var reviewers = await db.SlotReviewers.Where(reviewer => reviewer.SlotId == id).ToListAsync();
+    db.SlotReviewers.RemoveRange(reviewers);
+    db.ScheduleSlots.Remove(slot);
+    await db.SaveChangesAsync();
+
+    return Results.NoContent();
+}).RequireAuthorization("AdminOnly");
 
 app.MapPost("/schedule/jobs/deadline-reminders", async (SchedulingJobs jobs) =>
 {
@@ -411,38 +570,60 @@ static class ShortId
 
 sealed class IntegrationEventPublisher(IConfiguration configuration, ILogger<IntegrationEventPublisher> logger)
 {
-    private readonly string exchangeName = configuration["RabbitMQ:ExchangeName"] ?? "capstone.events";
-
-    public Task PublishAsync(string eventName, object payload)
+    public async Task PublishAsync(string eventName, object payload)
     {
         try
         {
-            var factory = new ConnectionFactory
+            var config = new ProducerConfig
             {
-                HostName = configuration["RabbitMQ:HostName"] ?? "localhost",
-                Port = int.TryParse(configuration["RabbitMQ:Port"], out var port) ? port : 5672,
-                UserName = configuration["RabbitMQ:UserName"] ?? "guest",
-                Password = configuration["RabbitMQ:Password"] ?? "guest",
-                DispatchConsumersAsync = true
+                BootstrapServers = configuration["Kafka:BootstrapServers"] ?? "localhost:9092",
+                Acks = Acks.All
             };
-            using var connection = factory.CreateConnection();
-            using var channel = connection.CreateModel();
-            channel.ExchangeDeclare(exchangeName, ExchangeType.Topic, durable: true, autoDelete: false);
-
-            var envelope = JsonSerializer.SerializeToUtf8Bytes(new IntegrationEvent(eventName, DateTime.UtcNow, payload));
-            var properties = channel.CreateBasicProperties();
-            properties.Persistent = true;
-            properties.ContentType = "application/json";
-            properties.Type = eventName;
-
-            channel.BasicPublish(exchangeName, eventName, properties, envelope);
+            using var producer = new ProducerBuilder<string, string>(config).Build();
+            var envelope = JsonSerializer.Serialize(new IntegrationEvent(eventName, DateTime.UtcNow, payload));
+            await producer.ProduceAsync(eventName, new Message<string, string>
+            {
+                Key = eventName,
+                Value = envelope
+            });
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Could not publish integration event {EventName}.", eventName);
+            logger.LogWarning(ex, "Could not publish Kafka integration event {EventName}.", eventName);
+        }
+    }
+}
+
+static class RoundHelpers
+{
+    public static IQueryable<ReviewRound> ApplySort(IQueryable<ReviewRound> query, string? sortBy, string? sortDir)
+    {
+        var descending = string.Equals(sortDir, "desc", StringComparison.OrdinalIgnoreCase);
+        return ((sortBy ?? "start").Trim().ToLowerInvariant(), descending) switch
+        {
+            ("name", false) => query.OrderBy(round => round.Name),
+            ("name", true) => query.OrderByDescending(round => round.Name),
+            ("status", false) => query.OrderBy(round => round.Status),
+            ("status", true) => query.OrderByDescending(round => round.Status),
+            ("end", false) => query.OrderBy(round => round.EndDate),
+            ("end", true) => query.OrderByDescending(round => round.EndDate),
+            ("start", true) => query.OrderByDescending(round => round.StartDate),
+            _ => query.OrderBy(round => round.StartDate)
+        };
+    }
+
+    public static string NormalizeStatus(string? requestedStatus, DateOnly startDate, DateOnly endDate)
+    {
+        string[] allowedStatuses = ["Upcoming", "Active", "Closed"];
+        var match = allowedStatuses.FirstOrDefault(status =>
+            string.Equals(status, requestedStatus?.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (match is not null)
+        {
+            return match;
         }
 
-        return Task.CompletedTask;
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        return today < startDate ? "Upcoming" : today > endDate ? "Closed" : "Active";
     }
 }
 
@@ -452,4 +633,15 @@ record DeadlineReminderResult(int SlotCount);
 record RoundStatusUpdateResult(int UpdatedCount);
 record ScheduleSlotResponse(string Id, string RoundId, string ProjectId, DateTime ReviewDate, string Room, int DurationMinutes, string[] CouncilMemberIds);
 record CreateRoundRequest(string Name, DateOnly StartDate, DateOnly EndDate, string CreatedBy);
+record UpdateRoundRequest(string Name, DateOnly StartDate, DateOnly EndDate, string? Status);
 record AssignSlotRequest(string RoundId, string ProjectId, DateTime ReviewDate, string Room, int DurationMinutes, string[] CouncilMemberIds);
+record Paging(int Page, int PageSize)
+{
+    public static Paging Normalize(int? page, int? pageSize) =>
+        new(Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 20, 1, 100));
+}
+
+record PagedResult<T>(IReadOnlyList<T> Items, int Page, int PageSize, int TotalCount)
+{
+    public int TotalPages => TotalCount == 0 ? 0 : (int)Math.Ceiling(TotalCount / (double)PageSize);
+}
