@@ -104,12 +104,52 @@ export default function SubmissionsPage() {
             return sortBy === 'newest' ? dateB - dateA : dateA - dateB;
         });
 
-    const totalItems = filteredSubmissions.length;
+    const [totalItems, setTotalItems] = useState(0);
     const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
-    const paginatedSubmissions = filteredSubmissions.slice(
-        (currentPage - 1) * itemsPerPage,
-        currentPage * itemsPerPage
-    );
+    const paginatedSubmissions = filteredSubmissions; // Already sliced on server
+
+    // --- LOAD SUBMISSIONS FOR A PROJECT ---
+    const loadSubmissions = async (projId: string) => {
+        if (!projId) return;
+        try {
+            const data = await api.getSubmissions(projId, currentPage, itemsPerPage);
+            let list: any[] = [];
+            let total = 0;
+            if (data && Array.isArray(data.items)) {
+                list = data.items;
+                total = data.totalCount || data.items.length;
+            } else if (Array.isArray(data)) {
+                list = data;
+                total = data.length;
+            }
+
+            const mappedSubmissions: SubmissionItem[] = list.map((sub: BackendSubmission) => ({
+                id: sub.id,
+                projectId: projId,
+                version: sub.version || 1,
+                fileName: sub.fileName || 'unknown.pdf',
+                storedName: sub.fileUrl ? sub.fileUrl.split('/').pop() || sub.fileName : sub.fileName,
+                fileUrl: sub.fileUrl || '',
+                submittedAt: sub.submittedAt ? new Date(sub.submittedAt).toLocaleString() : 'Unknown date',
+                submittedBy: sub.submittedBy || 'Team Member',
+                status: sub.status === 'Evaluated' ? 'Evaluated' : 'Pending Review',
+            }));
+            setSubmissions(mappedSubmissions);
+            setTotalItems(total);
+            setProjectId(projId);
+        } catch (err) {
+            console.error('Failed to load submissions:', err);
+            setSubmissions([]);
+            setTotalItems(0);
+        }
+    };
+
+    // Trigger reload when selected project or pagination details change
+    useEffect(() => {
+        if (selectedProjectId) {
+            loadSubmissions(selectedProjectId);
+        }
+    }, [selectedProjectId, currentPage, itemsPerPage]);
 
     // --- LOAD SUBMISSIONS ---
     useEffect(() => {
@@ -131,15 +171,12 @@ export default function SubmissionsPage() {
 
                     if (lecturerProjects.length > 0) {
                         setSelectedProjectId(lecturerProjects[0].id);
-                        await loadSubmissions(lecturerProjects[0].id);
                     }
                 } else {
                     // For Student: get their project
                     const studentProject = projectsData[0];
                     if (studentProject) {
                         setSelectedProjectId(studentProject.id);
-                        setProjectId(studentProject.id);
-                        await loadSubmissions(studentProject.id);
                     }
                 }
             } catch (err) {
@@ -153,34 +190,10 @@ export default function SubmissionsPage() {
         loadData();
     }, [role, userId]);
 
-    // --- LOAD SUBMISSIONS FOR A PROJECT ---
-    const loadSubmissions = async (projectId: string) => {
-        try {
-            const data = await api.getSubmissions(projectId);
-            const mappedSubmissions: SubmissionItem[] = data.map((sub: BackendSubmission) => ({
-                id: sub.id,
-                projectId: projectId,
-                version: sub.version || 1,
-                fileName: sub.fileName || 'unknown.pdf',
-                storedName: sub.fileUrl ? sub.fileUrl.split('/').pop() || sub.fileName : sub.fileName,
-                fileUrl: sub.fileUrl || '',
-                submittedAt: sub.submittedAt ? new Date(sub.submittedAt).toLocaleString() : 'Unknown date',
-                submittedBy: sub.submittedBy || 'Team Member',
-                status: sub.status === 'Evaluated' ? 'Evaluated' : 'Pending Review',
-            }));
-            setSubmissions(mappedSubmissions);
-            setProjectId(projectId);
-        } catch (err) {
-            console.error('Failed to load submissions:', err);
-            setSubmissions([]);
-        }
-    };
-
     // --- HANDLE PROJECT SWITCH (Lecturer) ---
     const handleProjectChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
         const newProjectId = e.target.value;
         setSelectedProjectId(newProjectId);
-        await loadSubmissions(newProjectId);
     };
 
     // --- UPLOAD FILE ---

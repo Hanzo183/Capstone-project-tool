@@ -332,3 +332,18 @@ input:checked + .slider-switch-round:before {
         grid-template-columns: 1fr;
     }
 }
+
+.card-clickable-area {
+    padding: 0.5rem;
+    border-radius: 0.5rem;
+    transition: background-color 0.2s ease, transform 0.2s ease;
+    margin: -0.5rem -0.5rem 0.5rem -0.5rem;
+}
+
+.card-clickable-area:hover {
+    background-color: rgba(37, 99, 235, 0.04);
+}
+
+.unread-item .card-clickable-area:hover {
+    background-color: rgba(37, 99, 235, 0.08);
+}

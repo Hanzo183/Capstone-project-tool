@@ -171,22 +171,6 @@ export default function StudentDashboard() {
         }
     };
 
-    const scheduleTimeline: ScheduleEvent[] = [
-        { id: 't1', title: 'Proposal Submission', date: 'May 15, 2026', status: 'Completed' },
-        { id: 't2', title: 'Iteration 1 Review', date: 'June 25, 2026', status: 'Current' },
-        { id: 't3', title: 'Final Defense', date: 'July 20, 2026', status: 'Upcoming' },
-    ];
-
-    const upcomingSlot: ReviewSlot = {
-        id: 'R1',
-        projectId: currentProject.id,
-        projectTitle: currentProject.title,
-        room: 'Alpha 105',
-        time: '2026-06-25 10:00 AM',
-        council: ['Dr. Nguyen Van A', 'Dr. Tran Thi B', 'Mr. Le Van C'],
-        type: 'Initial Review'
-    };
-
     // ✅ FIXED: Download function for dashboard
     const handleDownload = async (storedName: string, displayName: string) => {
         if (!currentProject.id || currentProject.id === '...') {

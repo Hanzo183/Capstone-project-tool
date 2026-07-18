@@ -364,9 +364,16 @@ export const api = {
     },
 
     // Get submission history
-    getSubmissions: async (projectId: string) => {
+    getSubmissions: async (projectId: string, page?: number, pageSize?: number) => {
         const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE_URL}/projects/${projectId}/history`, {
+        let url = `${API_BASE_URL}/projects/${projectId}/history`;
+        const queryParams = new URLSearchParams();
+        if (page !== undefined) queryParams.append('page', page.toString());
+        if (pageSize !== undefined) queryParams.append('pageSize', pageSize.toString());
+        const qs = queryParams.toString();
+        if (qs) url += `?${qs}`;
+
+        const response = await fetch(url, {
             headers: {
                 'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json'
@@ -767,17 +774,24 @@ export const api = {
     // ============================================
 
     // ✅ FIXED: Get notifications for a specific user
-    getNotifications: async () => {
+    getNotifications: async (page?: number, pageSize?: number) => {
         const token = localStorage.getItem('token');
         const userId = localStorage.getItem('userId');
 
         if (!userId) {
             console.warn('No userId found, cannot fetch notifications');
-            return [];
+            return { items: [], totalCount: 0 };
         }
 
         try {
-            const response = await fetch(`${API_BASE_URL}/notifications/${userId}`, {
+            let url = `${API_BASE_URL}/notifications/${userId}`;
+            const queryParams = new URLSearchParams();
+            if (page !== undefined) queryParams.append('page', page.toString());
+            if (pageSize !== undefined) queryParams.append('pageSize', pageSize.toString());
+            const qs = queryParams.toString();
+            if (qs) url += `?${qs}`;
+
+            const response = await fetch(url, {
                 headers: {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json'
@@ -785,14 +799,14 @@ export const api = {
             });
             if (!response.ok) {
                 if (response.status === 404) {
-                    return [];
+                    return { items: [], totalCount: 0 };
                 }
                 throw new Error('Failed to fetch notifications');
             }
             return response.json();
         } catch  {
             console.error('getNotifications error');
-            return [];
+            return { items: [], totalCount: 0 };
         }
     },
 
@@ -815,8 +829,9 @@ export const api = {
     // ✅ FIXED: Mark all as read (fetch and mark individually)
     markAllNotificationsRead: async () => {
         try {
-            const notifications = await api.getNotifications();
-            const promises = notifications.map((n: { id: string }) =>
+            const res = await api.getNotifications();
+            const list = Array.isArray(res) ? res : (res && Array.isArray(res.items) ? res.items : []);
+            const promises = list.map((n: { id: string }) =>
                 api.markNotificationRead(n.id).catch(() => ({}))
             );
             await Promise.all(promises);
