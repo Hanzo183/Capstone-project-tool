@@ -205,23 +205,6 @@ export default function Register() {
                         />
                     </div>
 
-                    {/* Role Selection */}
-                    <div className="input-group">
-                        <label htmlFor="role">Role *</label>
-                        <select
-                            id="role"
-                            name="role"
-                            value={formData.role}
-                            onChange={handleChange}
-                            required
-                        >
-                            <option value="Student">Student</option>
-                            <option value="Lecturer">Lecturer</option>
-                            <option value="CouncilMember">Council Member</option>
-                            <option value="Admin">Admin</option>
-                        </select>
-                    </div>
-
                     {/* Password */}
                     <div className="input-group">
                         <label htmlFor="password">Password *</label>
