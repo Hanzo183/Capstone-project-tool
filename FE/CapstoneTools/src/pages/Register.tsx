@@ -73,13 +73,13 @@ export default function Register() {
         }
 
         if (formData.role === 'Student' && !formData.studentId.trim()) {
-            setError('Student ID is required for student accounts.');
+            setError('ID is required for student accounts.');
             setIsLoading(false);
             return;
         }
 
         if (formData.studentId.trim() && !studentIdPattern.test(formData.studentId.trim())) {
-            setError('Student ID must start with 2 letters followed by 6 numbers, for example SE192706.');
+            setError('ID must start with 2 letters followed by 6 numbers, for example SE192706.');
             setIsLoading(false);
             return;
         }
@@ -189,9 +189,9 @@ export default function Register() {
                         />
                     </div>
 
-                    {/* Student ID */}
+                    {/* ID */}
                     <div className="input-group">
-                        <label htmlFor="studentId">Student ID</label>
+                        <label htmlFor="studentId">ID</label>
                         <input
                             type="text"
                             id="studentId"
@@ -200,7 +200,7 @@ export default function Register() {
                             onChange={handleChange}
                             placeholder="SE192706"
                             pattern="[A-Za-z]{2}[0-9]{6}"
-                            title="Student ID must start with 2 letters followed by 6 numbers, for example SE192706."
+                            title="ID must start with 2 letters followed by 6 numbers, for example SE192706."
                             required={formData.role === 'Student'}
                         />
                     </div>

@@ -165,6 +165,10 @@ app.MapPost("/projects/{id}/members", async (string id, AssignProjectMemberReque
     ToHttpResult(await projects.AddMemberAsync(id, request, httpContext.User), createdLocation: _ => $"/projects/{id}/members"))
     .RequireAuthorization("ProjectManagers");
 
+app.MapPut("/projects/{id}/leader", async (string id, ChangeProjectLeaderRequest request, ProjectManagementService projects, HttpContext httpContext) =>
+    ToHttpResult(await projects.ChangeLeaderAsync(id, request, httpContext.User)))
+    .RequireAuthorization("ProjectManagers");
+
 app.MapDelete("/projects/{id}/members/{studentId}", async (string id, string studentId, ProjectManagementService projects, HttpContext httpContext) =>
     ToHttpResult(await projects.RemoveMemberAsync(id, studentId, httpContext.User)))
     .RequireAuthorization("ProjectManagers");
@@ -440,9 +444,52 @@ sealed class ProjectManagementService(
         return ServiceResult<ProjectMember>.Created(member);
     }
 
+    public async Task<ServiceResult<ProjectItem>> ChangeLeaderAsync(string id, ChangeProjectLeaderRequest request, ClaimsPrincipal user)
+    {
+        var studentId = ProjectValidation.NormalizeStudentId(request.StudentId);
+        if (string.IsNullOrWhiteSpace(studentId) || !ProjectValidation.IsValidStudentId(studentId))
+        {
+            return ServiceResult<ProjectItem>.BadRequest("Student ID must start with 2 letters followed by 6 numbers, for example SE192706.");
+        }
+
+        var project = await repository.GetAsync(id, tracking: true);
+        if (project is null)
+        {
+            return ServiceResult<ProjectItem>.NotFound("Project was not found.");
+        }
+
+        if (!CanManage(user, project))
+        {
+            return ServiceResult<ProjectItem>.Forbidden();
+        }
+
+        var missingStudentError = await userProfiles.ValidateStudentsExistAsync([studentId]);
+        if (missingStudentError is not null)
+        {
+            return ServiceResult<ProjectItem>.BadRequest(missingStudentError);
+        }
+
+        await repository.ChangeLeaderAsync(project, studentId);
+        await events.PublishAsync("project.leader.changed", new
+        {
+            ProjectId = project.Id,
+            project.Title,
+            project.TeamId,
+            TeamLeaderId = studentId,
+            ChangedAt = DateTime.UtcNow
+        });
+
+        return ServiceResult<ProjectItem>.Ok(project);
+    }
+
     public async Task<ServiceResult<object>> RemoveMemberAsync(string id, string studentId, ClaimsPrincipal user)
     {
         var normalizedStudentId = ProjectValidation.NormalizeStudentId(studentId);
+        if (string.IsNullOrWhiteSpace(normalizedStudentId) || !ProjectValidation.IsValidStudentId(normalizedStudentId))
+        {
+            return ServiceResult<object>.BadRequest("Student ID must start with 2 letters followed by 6 numbers, for example SE192706.");
+        }
+
         var project = await repository.GetAsync(id, tracking: true);
         if (project is null)
         {
@@ -552,6 +599,7 @@ interface IProjectRepository
     Task ReplaceMembersAsync(string projectId, IReadOnlyList<string> studentIds, string? leaderId);
     Task<bool> MemberExistsAsync(string projectId, string studentId);
     Task AddMemberAsync(ProjectItem project, ProjectMember member);
+    Task ChangeLeaderAsync(ProjectItem project, string studentId);
     Task<bool> RemoveMemberAsync(ProjectItem project, string? studentId);
     Task<int> GetNextSubmissionVersionAsync(string projectId);
     Task AddSubmissionAsync(SubmissionItem submission);
@@ -667,6 +715,35 @@ sealed class EfProjectRepository(ProjectDbContext db) : IProjectRepository
     public async Task AddMemberAsync(ProjectItem project, ProjectMember member)
     {
         db.ProjectMembers.Add(member);
+        project.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+    }
+
+    public async Task ChangeLeaderAsync(ProjectItem project, string studentId)
+    {
+        var members = await db.ProjectMembers
+            .Where(member => member.ProjectId == project.Id)
+            .ToListAsync();
+
+        var newLeader = members.FirstOrDefault(member => member.StudentId == studentId);
+        if (newLeader is null)
+        {
+            newLeader = new ProjectMember
+            {
+                ProjectId = project.Id,
+                StudentId = studentId,
+                AddedAt = DateTime.UtcNow
+            };
+            db.ProjectMembers.Add(newLeader);
+            members.Add(newLeader);
+        }
+
+        foreach (var member in members)
+        {
+            member.IsLeader = member.StudentId == studentId;
+        }
+
+        project.TeamLeaderId = studentId;
         project.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync();
     }
@@ -951,6 +1028,7 @@ record UpdateProjectRequest(string Title, string? Description, string TeamId, st
 record SubmitProjectRequest(string FileName, string FileUrl, string SubmittedBy);
 record UpdateProjectStatusRequest(string Status);
 record AssignProjectMemberRequest(string StudentId);
+record ChangeProjectLeaderRequest(string StudentId);
 record ProjectSearchCriteria(string? Search, string? Status, string? Round, string? Reviewer, string SortBy, bool SortDescending, int Page, int PageSize, string? StudentId, bool RestrictToStudent)
 {
     public static ProjectSearchCriteria From(ProjectSearchRequest request, string? studentId, bool restrictToStudent)

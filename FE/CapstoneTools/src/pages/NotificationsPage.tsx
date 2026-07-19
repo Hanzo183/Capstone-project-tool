@@ -19,10 +19,10 @@ export default function NotificationsPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [successMsg, setSuccessMsg] = useState('');
 
-    const [sortBy, setSortBy] = useState<'newest' | 'oldest'>('newest');
-    const [currentPage, setCurrentPage] = useState(1);
-    const [pageSize, setPageSize] = useState(5);
-    const [totalNotifications, setTotalNotifications] = useState(0);
+    const [sortBy] = useState<'newest' | 'oldest'>('newest');
+    const [currentPage] = useState(1);
+    const [pageSize] = useState(5);
+    const [, setTotalNotifications] = useState(0);
 
     const loadNotificationsData = async (silent = false) => {
         if (!silent) setIsLoading(true);
@@ -32,7 +32,7 @@ export default function NotificationsPage() {
                 const prefs = await api.getNotificationPreferences();
                 if (prefs) setPreferences(prefs);
             } catch (err) {
-                console.warn("Preferences endpoint failure, using fallback:", err);
+                console.warn("Preferences endpoint failure:", err);
             }
 
             // Get notifications
@@ -48,23 +48,7 @@ export default function NotificationsPage() {
                     total = res.length;
                 }
             } catch (err) {
-                console.warn("Notifications list failure, using fallback:", err);
-            }
-
-            if (!notifsData || notifsData.length === 0) {
-                const stored = localStorage.getItem('local_notifications');
-                if (stored) {
-                    notifsData = JSON.parse(stored);
-                    total = notifsData.length;
-                } else {
-                    notifsData = [
-                        { id: 'N1', title: 'Review Slot Assigned', body: 'You have been assigned to evaluate the "Microservices E-Commerce App" project on June 25 at 10:00 AM.', createdAt: new Date(Date.now() - 3600000 * 2).toISOString(), isRead: false },
-                        { id: 'N2', title: 'New Submission Uploaded', body: 'Team G2 has uploaded a new PDF artifact for "AI Smart Agriculture Tracking".', createdAt: new Date(Date.now() - 3600000 * 5).toISOString(), isRead: false },
-                        { id: 'N3', title: 'Rebuttal Received', body: 'A new rebuttal comment has been submitted by student Tran Van Bao.', createdAt: new Date(Date.now() - 3600000 * 24).toISOString(), isRead: true }
-                    ];
-                    localStorage.setItem('local_notifications', JSON.stringify(notifsData));
-                    total = notifsData.length;
-                }
+                console.warn("Notifications list failure:", err);
             }
 
             const mapped: NotificationItem[] = notifsData.map(n => ({
@@ -119,7 +103,6 @@ export default function NotificationsPage() {
 
         const updated = notifications.map(n => n.id === id ? { ...n, isRead: true } : n);
         setNotifications(updated);
-        localStorage.setItem('local_notifications', JSON.stringify(updated));
         updateBadge(updated);
     };
 
@@ -132,16 +115,20 @@ export default function NotificationsPage() {
 
         const updated = notifications.map(n => ({ ...n, isRead: true }));
         setNotifications(updated);
-        localStorage.setItem('local_notifications', JSON.stringify(updated));
         updateBadge(updated);
         setSuccessMsg('All notifications marked as read.');
         setTimeout(() => setSuccessMsg(''), 3000);
     };
 
-    const handleDeleteNotification = (id: string) => {
+    const handleDeleteNotification = async (id: string) => {
+        try {
+            await api.deleteNotification(id);
+        } catch (err) {
+            console.warn("Delete notification failure:", err);
+            return;
+        }
         const updated = notifications.filter(n => n.id !== id);
         setNotifications(updated);
-        localStorage.setItem('local_notifications', JSON.stringify(updated));
         updateBadge(updated);
     };
 

@@ -1,6 +1,12 @@
 // src/api.ts
 const API_BASE_URL = 'http://localhost:5000';
 
+const unwrapList = <T = any>(data: any): T[] => {
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.items)) return data.items;
+    return [];
+};
+
 export const api = {
     // ============================================
     // 🔐 IDENTITY SERVICE - AUTHENTICATION
@@ -164,7 +170,7 @@ export const api = {
                 throw new Error(`Failed to fetch users: ${response.status}`);
             }
 
-            return response.json();
+            return unwrapList(await response.json());
         } catch (err) {
             console.error('getUsers error:', err);
             throw err;
@@ -238,7 +244,7 @@ export const api = {
         if (!response.ok) {
             throw new Error('Failed to fetch projects');
         }
-        return response.json();
+        return unwrapList(await response.json());
     },
 
     // Get single project
@@ -310,6 +316,23 @@ export const api = {
         if (!response.ok) {
             const error = await response.json();
             throw new Error(error.message || 'Failed to assign project member');
+        }
+        return response.json();
+    },
+
+    changeProjectLeader: async (projectId: string, studentId: string) => {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/projects/${projectId}/leader`, {
+            method: 'PUT',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ studentId })
+        });
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.message || 'Failed to change project leader');
         }
         return response.json();
     },
@@ -436,7 +459,7 @@ export const api = {
                 }
                 throw new Error('Failed to fetch review rounds');
             }
-            return response.json();
+            return unwrapList(await response.json());
         } catch (err) {
             console.error('getReviewRounds error:', err);
             return [];
@@ -506,7 +529,7 @@ export const api = {
                 }
                 throw new Error('Failed to fetch schedule');
             }
-            return response.json();
+            return unwrapList(await response.json());
         } catch (err) {
             console.error('getSlotsByRound error:', err);
             return [];
@@ -530,7 +553,7 @@ export const api = {
                 }
                 throw new Error('Failed to fetch schedule calendar');
             }
-            return response.json();
+            return unwrapList(await response.json());
         } catch (err) {
             console.error('getScheduleSlots error:', err);
             return [];
@@ -567,9 +590,53 @@ export const api = {
     },
 
     // ✅ NEW: Trigger reminders
+    updateScheduleSlot: async (slotId: string, slotData: {
+        roundId: string;
+        projectId: string;
+        reviewDate: string;
+        room: string;
+        durationMinutes?: number;
+        reviewerIds?: string[];
+        councilMemberIds?: string[];
+    }) => {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/schedule/${slotId}`, {
+            method: 'PUT',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                ...slotData,
+                councilMemberIds: slotData.councilMemberIds ?? slotData.reviewerIds ?? []
+            })
+        });
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.message || 'Failed to update schedule slot');
+        }
+        return response.json();
+    },
+
+    deleteScheduleSlot: async (slotId: string) => {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/schedule/${slotId}`, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.message || 'Failed to delete schedule slot');
+        }
+        return { success: true };
+    },
+
     triggerReminders: async () => {
         const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE_URL}/schedule/jobs/readline-reminders`, {
+        const response = await fetch(`${API_BASE_URL}/schedule/jobs/deadline-reminders`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${token}`,
@@ -614,7 +681,7 @@ export const api = {
         if (!response.ok) {
             throw new Error('Failed to fetch evaluations');
         }
-        return response.json();
+        return unwrapList(await response.json());
     },
 
     getAllEvaluations: async () => {
@@ -628,7 +695,7 @@ export const api = {
         if (!response.ok) {
             throw new Error('Failed to fetch evaluations');
         }
-        return response.json();
+        return unwrapList(await response.json());
     },
 
     // Create evaluation (Lecturer/Council)
@@ -667,7 +734,7 @@ export const api = {
         if (!response.ok) {
             throw new Error('Failed to fetch rebuttals');
         }
-        return response.json();
+        return unwrapList(await response.json());
     },
 
     getPendingRebuttals: async () => {
@@ -681,7 +748,7 @@ export const api = {
         if (!response.ok) {
             throw new Error('Failed to fetch pending rebuttals');
         }
-        return response.json();
+        return unwrapList(await response.json());
     },
 
     // Create rebuttal (Student)
@@ -720,7 +787,7 @@ export const api = {
         if (!response.ok) {
             throw new Error('Failed to respond to rebuttal');
         }
-        return response.json();
+        return unwrapList(await response.json());
     },
 
     // Update rebuttal status
@@ -780,7 +847,7 @@ export const api = {
 
         if (!userId) {
             console.warn('No userId found, cannot fetch notifications');
-            return { items: [], totalCount: 0 };
+            return [];
         }
 
         try {
@@ -799,14 +866,14 @@ export const api = {
             });
             if (!response.ok) {
                 if (response.status === 404) {
-                    return { items: [], totalCount: 0 };
+                    return [];
                 }
                 throw new Error('Failed to fetch notifications');
             }
             return response.json();
         } catch  {
             console.error('getNotifications error');
-            return { items: [], totalCount: 0 };
+            return [];
         }
     },
 
@@ -843,6 +910,21 @@ export const api = {
     },
 
     // ✅ FIXED: Get notification preferences with userId
+    deleteNotification: async (notificationId: string) => {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/notifications/${notificationId}`, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        if (!response.ok) {
+            throw new Error('Failed to delete notification');
+        }
+        return { success: true };
+    },
+
     getNotificationPreferences: async () => {
         const token = localStorage.getItem('token');
         const userId = localStorage.getItem('userId');

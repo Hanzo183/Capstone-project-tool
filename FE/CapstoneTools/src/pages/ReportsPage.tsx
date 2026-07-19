@@ -76,7 +76,7 @@ export default function ReportsPage() {
     const [isDownloading, setIsDownloading] = useState(false);
 
     const role = localStorage.getItem('role');
-    const isAdminOrLecturer = role === 'Admin' || role === 'Lecturer';
+    const canViewReports = role === 'Lecturer';
 
     // --- LOAD ROUNDS ---
     useEffect(() => {
@@ -97,10 +97,10 @@ export default function ReportsPage() {
             }
         };
 
-        if (isAdminOrLecturer) {
+        if (canViewReports) {
             loadRounds();
         }
-    }, [isAdminOrLecturer]);
+    }, [canViewReports]);
 
     // --- ✅ FIXED: BUILD REPORT FROM EXISTING DATA ---
     useEffect(() => {
@@ -111,8 +111,12 @@ export default function ReportsPage() {
                 setIsLoadingReport(true);
                 setErrorMsg('');
 
-                // 1. Get all projects
-                const allProjects = await api.getProjects();
+                // 1. Get real projects and real evaluations for the selected round
+                const [projectsResponse, roundReport] = await Promise.all([
+                    api.getProjects(),
+                    api.getReports(selectedRoundId).catch(() => null)
+                ]);
+                const allProjects = Array.isArray(projectsResponse) ? projectsResponse : [];
 
                 // 2. Filter projects by selected round
                 const roundProjects = allProjects.filter(
@@ -123,35 +127,32 @@ export default function ReportsPage() {
                 let allSubmissions: Submission[] = [];
                 for (const project of roundProjects) {
                     try {
-                        const subs = await api.getSubmissions(project.id);
+                        const submissionResponse = await api.getSubmissions(project.id);
+                        const subs = Array.isArray(submissionResponse)
+                            ? submissionResponse
+                            : (Array.isArray(submissionResponse?.items) ? submissionResponse.items : []);
                         allSubmissions = [...allSubmissions, ...subs];
                     } catch  {
                         console.warn(`No submissions for project ${project.id}`);
                     }
                 }
 
-                // 4. Get all evaluations for these projects
-                let allEvaluations: Evaluation[] = [];
-                for (const project of roundProjects) {
-                    try {
-                        const evals = await api.getEvaluations(project.id);
-                        allEvaluations = [...allEvaluations, ...evals];
-                    } catch  {
-                        console.warn(`No evaluations for project ${project.id}`);
-                    }
-                }
+                // 4. Use report endpoint evaluations from the database
+                const allEvaluations: Evaluation[] = Array.isArray(roundReport?.evaluations)
+                    ? roundReport.evaluations
+                    : [];
 
                 // 5. Calculate statistics
                 const totalProjects = roundProjects.length;
                 const totalSubmissions = allSubmissions.length;
-                const evaluatedProjects = allEvaluations.length > 0 ? roundProjects.length : 0;
+                const evaluatedProjects = new Set(allEvaluations.map(item => item.projectId)).size;
                 const pendingProjects = Math.max(0, totalProjects - evaluatedProjects);
 
                 // Calculate average score
                 let averageScore = 0;
                 if (allEvaluations.length > 0) {
                     const totalScore = allEvaluations.reduce((sum: number, e: Evaluation) => sum + e.score, 0);
-                    averageScore = totalScore / allEvaluations.length;
+                    averageScore = Number(roundReport?.averageScore ?? (totalScore / allEvaluations.length));
                 }
 
                 // 6. Build evaluation details
@@ -159,8 +160,8 @@ export default function ReportsPage() {
                     const project = roundProjects.find((p: Project) => p.id === evalItem.projectId);
                     return {
                         projectId: evalItem.projectId,
-                        projectTitle: project?.title || 'Unknown Project',
-                        teamId: project?.teamId || 'N/A',
+                        projectTitle: project?.title || evalItem.projectId,
+                        teamId: project?.teamId || '',
                         evaluatorId: evalItem.evaluatorId,
                         score: evalItem.score,
                         feedback: evalItem.feedback || '—',
@@ -176,8 +177,8 @@ export default function ReportsPage() {
                         projectScores[evalItem.projectId] = {
                             total: 0,
                             count: 0,
-                            title: project?.title || 'Unknown Project',
-                            teamId: project?.teamId || 'N/A'
+                            title: project?.title || evalItem.projectId,
+                            teamId: project?.teamId || ''
                         };
                     }
                     projectScores[evalItem.projectId].total += evalItem.score;
@@ -195,7 +196,7 @@ export default function ReportsPage() {
                 const round = rounds.find(r => r.id === selectedRoundId);
                 const report: ReportData = {
                     roundId: selectedRoundId,
-                    roundName: round?.name || 'Unknown Round',
+                    roundName: round?.name || selectedRoundId,
                     totalProjects,
                     evaluatedProjects,
                     pendingProjects,
@@ -294,7 +295,7 @@ export default function ReportsPage() {
     };
 
     // Redirect if not authorized
-    if (!isAdminOrLecturer) {
+    if (!canViewReports) {
         return (
             <div className="reports-page">
                 <div className="unauthorized">

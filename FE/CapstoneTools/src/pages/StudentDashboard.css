@@ -456,47 +456,6 @@
     }
 }
 
-/* --- REFRESH / SYNC BUTTON --- */
-.btn-refresh-dashboard {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    background: white;
-    color: #0f172a;
-    border: 1px solid #e2e8f0;
-    padding: 0.5rem 1rem;
-    font-size: 0.85rem;
-    font-weight: 600;
-    border-radius: 0.5rem;
-    cursor: pointer;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-    transition: all 0.2s ease;
-}
-
-.btn-refresh-dashboard:hover:not(:disabled) {
-    background: #f8fafc;
-    border-color: #cbd5e1;
-    transform: translateY(-1px);
-}
-
-.btn-refresh-dashboard:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-}
-
-.refresh-spinning {
-    animation: refresh-spin-animation 1s linear infinite;
-}
-
-@keyframes refresh-spin-animation {
-    0% {
-        transform: rotate(0deg);
-    }
-    100% {
-        transform: rotate(360deg);
-    }
-}
-
 /* --- ERROR BOUNDARY CARD --- */
 .error-boundary-card {
     background: #fef2f2;

@@ -66,6 +66,7 @@ builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("Authenticated", policy => policy.RequireAuthenticatedUser());
     options.AddPolicy("AdminOnly", policy => policy.RequireAssertion(context => HasRole(context.User, "Admin")));
+    options.AddPolicy("ReviewStaff", policy => policy.RequireAssertion(context => HasRole(context.User, "Admin", "Lecturer", "CouncilMember")));
 });
 builder.Services.AddDbContext<SchedulingDbContext>(options =>
     options.UseSqlServer(connectionString));
@@ -316,7 +317,7 @@ app.MapPost("/schedule/assign", async (AssignSlotRequest request, SchedulingDbCo
             councilMemberIds),
         @event = "schedule.created"
     });
-}).RequireAuthorization("AdminOnly");
+}).RequireAuthorization("ReviewStaff");
 
 app.MapGet("/schedule/calendar", async (DateOnly? from, DateOnly? to, SchedulingDbContext db) =>
 {
@@ -363,6 +364,19 @@ app.MapPut("/schedule/{id}", async (string id, AssignSlotRequest request, Schedu
         return Results.BadRequest(new { message = "Duration must be greater than 0 minutes." });
     }
 
+    if (request.CouncilMemberIds is null ||
+        request.CouncilMemberIds.Length == 0 ||
+        request.CouncilMemberIds.Any(string.IsNullOrWhiteSpace))
+    {
+        return Results.BadRequest(new { message = "At least one council member is required." });
+    }
+
+    var roundExists = await db.ReviewRounds.AnyAsync(round => round.Id == request.RoundId);
+    if (!roundExists)
+    {
+        return Results.BadRequest(new { message = "Review round was not found." });
+    }
+
     var slot = await db.ScheduleSlots.FirstOrDefaultAsync(candidate => candidate.Id == id);
     if (slot is null)
     {
@@ -399,7 +413,7 @@ app.MapPut("/schedule/{id}", async (string id, AssignSlotRequest request, Schedu
     });
 
     return Results.Ok(new ScheduleSlotResponse(slot.Id, slot.RoundId, slot.ProjectId, slot.ReviewDate, slot.Room, slot.DurationMinutes, councilMemberIds));
-}).RequireAuthorization("AdminOnly");
+}).RequireAuthorization("ReviewStaff");
 
 app.MapDelete("/schedule/{id}", async (string id, SchedulingDbContext db) =>
 {
@@ -415,7 +429,7 @@ app.MapDelete("/schedule/{id}", async (string id, SchedulingDbContext db) =>
     await db.SaveChangesAsync();
 
     return Results.NoContent();
-}).RequireAuthorization("AdminOnly");
+}).RequireAuthorization("ReviewStaff");
 
 app.MapPost("/schedule/jobs/deadline-reminders", async (SchedulingJobs jobs) =>
 {

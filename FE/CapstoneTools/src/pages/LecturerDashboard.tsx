@@ -16,15 +16,6 @@ interface MentoredGroup {
     members: string[];
 }
 
-interface UpcomingCouncil {
-    id: string;
-    timeSlot: string;
-    room: string;
-    projectTitle: string;
-    role: 'Chairman' | 'Secretary' | 'Member';
-    projectId: string;
-}
-
 interface BackendProject {
     id: string;
     title: string;
@@ -44,11 +35,17 @@ interface ProjectMember {
     isLeader?: boolean;
 }
 
+interface ReviewRound {
+    id: string;
+    name: string;
+    status?: string;
+}
+
 const studentIdPattern = /^[A-Za-z]{2}\d{6}$/;
 
 export default function LecturerDashboard() {
     const [mentoredGroups, setMentoredGroups] = useState<MentoredGroup[]>([]);
-    const [upcomingCouncils, setUpcomingCouncils] = useState<UpcomingCouncil[]>([]);
+    const [reviewRounds, setReviewRounds] = useState<ReviewRound[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [errorMsg, setErrorMsg] = useState('');
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -65,7 +62,10 @@ export default function LecturerDashboard() {
                 setErrorMsg('');
 
                 // --- 1. FETCH ALL PROJECTS ---
-                const projectsData = await api.getProjects();
+                const projectsResponse = await api.getProjects();
+                const projectsData = Array.isArray(projectsResponse) ? projectsResponse : [];
+                const roundsResponse = await api.getReviewRounds().catch(() => []);
+                setReviewRounds(Array.isArray(roundsResponse) ? roundsResponse : []);
 
                 // Filter projects where this lecturer is the supervisor
                 const lecturerProjects = projectsData.filter(
@@ -76,9 +76,9 @@ export default function LecturerDashboard() {
                     lecturerProjects.map(async (project: BackendProject) => {
                         try {
                             const members = await api.getProjectMembers(project.id);
-                            return [project.id, members] as const;
+                            return [project.id, Array.isArray(members) ? members : []] as const;
                         } catch {
-                            return [project.id, []] as const;
+                            return [project.id, [] as ProjectMember[]] as const;
                         }
                     })
                 );
@@ -116,28 +116,6 @@ export default function LecturerDashboard() {
 
                 setMentoredGroups(mappedGroups);
 
-                // --- 2. FETCH SCHEDULING SLOTS (Mock for now) ---
-                const mockCouncils: UpcomingCouncil[] = [
-                    {
-                        id: 'C01',
-                        timeSlot: 'June 25, 10:00 AM',
-                        room: 'Alpha 105',
-                        projectTitle: 'IoT Home Automation Hub',
-                        role: 'Chairman',
-                        projectId: 'PRJ-1001'
-                    },
-                    {
-                        id: 'C02',
-                        timeSlot: 'June 25, 02:00 PM',
-                        room: 'Beta 202',
-                        projectTitle: 'Mobile Health Diagnostics',
-                        role: 'Member',
-                        projectId: 'PRJ-1002'
-                    },
-                ];
-
-                setUpcomingCouncils(mockCouncils);
-
             } catch (err) {
                 console.error('Failed to load dashboard:', err);
                 setErrorMsg('Failed to load dashboard data. Please refresh.');
@@ -162,12 +140,6 @@ export default function LecturerDashboard() {
         // navigate(`/submissions?projectId=${projectId}`);
     };
 
-    // --- HANDLE OPEN EVALUATION ---
-    const handleOpenEvaluation = (projectId: string, projectTitle: string) => {
-        // ✅ FIXED: Use alert or navigate
-        alert(`Opening evaluation sheet for: ${projectTitle} (${projectId})`);
-        // navigate(`/evaluation/${projectId}`);
-    };
 
     // --- HANDLE CREATE PROJECT ---
     const handleCreateProject = () => {
@@ -184,6 +156,7 @@ export default function LecturerDashboard() {
         const formData = new FormData(form);
         const title = String(formData.get('title') || '').trim();
         const teamId = String(formData.get('teamId') || '').trim();
+        const roundId = String(formData.get('roundId') || '').trim();
         const teamLeaderId = String(formData.get('teamLeaderId') || '').trim().toUpperCase();
         const memberStudentIds = String(formData.get('memberStudentIds') || '')
             .split(/[,\s]+/)
@@ -197,6 +170,11 @@ export default function LecturerDashboard() {
 
         if (!teamId) {
             alert('Team ID is required.');
+            return;
+        }
+
+        if (!roundId) {
+            alert('Please select a review round for this project.');
             return;
         }
 
@@ -215,6 +193,7 @@ export default function LecturerDashboard() {
             description: String(formData.get('description') || '').trim(),
             teamId,
             lecturerId: lecturerId,
+            roundId,
             teamLeaderId: teamLeaderId || undefined,
             memberStudentIds,
             status: 'Draft'
@@ -278,6 +257,30 @@ export default function LecturerDashboard() {
         }
     };
 
+    const handleChangeLeader = async (projectId: string, studentId: string) => {
+        if (!window.confirm(`Make ${studentId} the team leader for this project?`)) {
+            return;
+        }
+
+        try {
+            await api.changeProjectLeader(projectId, studentId);
+            setMentoredGroups(prev => prev.map(group => {
+                if (group.projectId !== projectId) {
+                    return group;
+                }
+
+                return {
+                    ...group,
+                    studentLeader: studentId,
+                    members: group.members.includes(studentId) ? group.members : [...group.members, studentId],
+                    memberCount: group.members.includes(studentId) ? group.memberCount : group.memberCount + 1
+                };
+            }));
+        } catch (err: any) {
+            alert(err.message || 'Failed to change team leader.');
+        }
+    };
+
     return (
         <div className="lecturer-dashboard-container">
             {/* Dashboard Top Header Section */}
@@ -292,10 +295,6 @@ export default function LecturerDashboard() {
                     <div className="stat-pill">
                         <span className="stat-dot green"></span>
                         <strong>{mentoredGroups.length}</strong> Mentored Groups
-                    </div>
-                    <div className="stat-pill">
-                        <span className="stat-dot indigo"></span>
-                        <strong>{upcomingCouncils.length}</strong> Active Councils
                     </div>
                     <button
                         className="btn-create-project"
@@ -391,36 +390,67 @@ export default function LecturerDashboard() {
                                                 {group.members.length === 0 ? (
                                                     <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>No members assigned</span>
                                                 ) : (
-                                                    group.members.map(memberId => (
-                                                        <span key={memberId} style={{
-                                                            display: 'inline-flex',
-                                                            alignItems: 'center',
-                                                            gap: '0.25rem',
-                                                            padding: '0.15rem 0.45rem',
-                                                            borderRadius: '999px',
-                                                            background: '#e0f2fe',
-                                                            color: '#075985',
-                                                            fontSize: '0.75rem',
-                                                            fontWeight: 600
-                                                        }}>
-                                                            {memberId}
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => handleRemoveMember(group.projectId, memberId)}
-                                                                style={{
-                                                                    border: 'none',
-                                                                    background: 'transparent',
-                                                                    color: '#075985',
-                                                                    cursor: 'pointer',
-                                                                    fontWeight: 800,
-                                                                    padding: 0
-                                                                }}
-                                                                aria-label={`Remove ${memberId}`}
-                                                            >
-                                                                x
-                                                            </button>
-                                                        </span>
-                                                    ))
+                                                    group.members.map(memberId => {
+                                                        const isLeader = memberId === group.studentLeader;
+                                                        return (
+                                                            <span key={memberId} style={{
+                                                                display: 'inline-flex',
+                                                                alignItems: 'center',
+                                                                gap: '0.25rem',
+                                                                padding: '0.15rem 0.45rem',
+                                                                borderRadius: '999px',
+                                                                background: isLeader ? '#dcfce7' : '#e0f2fe',
+                                                                color: isLeader ? '#166534' : '#075985',
+                                                                fontSize: '0.75rem',
+                                                                fontWeight: 600
+                                                            }}>
+                                                                {memberId}
+                                                                {isLeader ? (
+                                                                    <span style={{
+                                                                        padding: '0.05rem 0.35rem',
+                                                                        borderRadius: '999px',
+                                                                        background: '#22c55e',
+                                                                        color: 'white',
+                                                                        fontSize: '0.65rem'
+                                                                    }}>
+                                                                        Leader
+                                                                    </span>
+                                                                ) : (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleChangeLeader(group.projectId, memberId)}
+                                                                        style={{
+                                                                            border: 'none',
+                                                                            background: '#0f766e',
+                                                                            color: 'white',
+                                                                            cursor: 'pointer',
+                                                                            borderRadius: '999px',
+                                                                            padding: '0.05rem 0.4rem',
+                                                                            fontSize: '0.65rem',
+                                                                            fontWeight: 700
+                                                                        }}
+                                                                    >
+                                                                        Make Leader
+                                                                    </button>
+                                                                )}
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleRemoveMember(group.projectId, memberId)}
+                                                                    style={{
+                                                                        border: 'none',
+                                                                        background: 'transparent',
+                                                                        color: isLeader ? '#166534' : '#075985',
+                                                                        cursor: 'pointer',
+                                                                        fontWeight: 800,
+                                                                        padding: 0
+                                                                    }}
+                                                                    aria-label={`Remove ${memberId}`}
+                                                                >
+                                                                    x
+                                                                </button>
+                                                            </span>
+                                                        );
+                                                    })
                                                 )}
                                             </div>
                                             <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
@@ -509,72 +539,6 @@ export default function LecturerDashboard() {
                         )}
                     </div>
 
-                    {/* Right Column: Upcoming Evaluation Council Schedules */}
-                    <div className="lecturer-glass-card sidebar-panel">
-                        <h3 className="panel-section-title">📅 Upcoming Council Panels</h3>
-
-                        {upcomingCouncils.length === 0 ? (
-                            <p style={{ textAlign: 'center', padding: '2rem', color: '#6b7280' }}>
-                                📭 No upcoming council assignments.
-                            </p>
-                        ) : (
-                            <div className="councils-vertical-timeline">
-                                {upcomingCouncils.map((council) => (
-                                    <div key={council.id} className="council-timeline-node" style={{
-                                        padding: '1rem',
-                                        marginBottom: '0.75rem',
-                                        background: '#f8fafc',
-                                        borderRadius: '8px',
-                                        border: '1px solid #e5e7eb'
-                                    }}>
-                                        <div className="node-time-marker" style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '0.5rem',
-                                            marginBottom: '0.5rem'
-                                        }}>
-                                            <span className="clock-emoji" style={{ fontSize: '1.2rem' }}>⏰</span>
-                                            <div>
-                                                <span className="time-string" style={{ fontWeight: '600', display: 'block' }}>
-                                                    {council.timeSlot}
-                                                </span>
-                                                <span className="room-string" style={{ fontSize: '0.85rem', color: '#6b7280' }}>
-                                                    Room: {council.room}
-                                                </span>
-                                            </div>
-                                        </div>
-
-                                        <div className="node-body-details">
-                                            <h5 style={{ margin: '0.25rem 0', fontSize: '0.95rem' }}>{council.projectTitle}</h5>
-                                            <div className="role-assignment-tag" style={{
-                                                margin: '0.25rem 0',
-                                                fontSize: '0.85rem'
-                                            }}>
-                                                Assigned Role: <span style={{ fontWeight: '600', color: '#3b82f6' }}>{council.role}</span>
-                                            </div>
-                                            <button
-                                                className="btn-grade-trigger"
-                                                onClick={() => handleOpenEvaluation(council.projectId, council.projectTitle)}
-                                                style={{
-                                                    marginTop: '0.5rem',
-                                                    padding: '0.4rem 1rem',
-                                                    background: '#22c55e',
-                                                    color: 'white',
-                                                    border: 'none',
-                                                    borderRadius: '6px',
-                                                    cursor: 'pointer',
-                                                    fontSize: '0.85rem',
-                                                    width: '100%'
-                                                }}
-                                            >
-                                                Open Evaluation Sheet
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
                 </div>
             )}
 
@@ -653,6 +617,29 @@ export default function LecturerDashboard() {
                                         border: '1px solid #d1d5db'
                                     }}
                                 />
+                            </div>
+
+                            <div style={{ marginBottom: '1rem' }}>
+                                <label style={{ display: 'block', marginBottom: '0.25rem', fontWeight: '500' }}>
+                                    Review Round *
+                                </label>
+                                <select
+                                    name="roundId"
+                                    required
+                                    style={{
+                                        width: '100%',
+                                        padding: '0.5rem',
+                                        borderRadius: '6px',
+                                        border: '1px solid #d1d5db'
+                                    }}
+                                >
+                                    <option value="">Select review round</option>
+                                    {reviewRounds.map(round => (
+                                        <option key={round.id} value={round.id}>
+                                            {round.name}{round.status ? ` (${round.status})` : ''}
+                                        </option>
+                                    ))}
+                                </select>
                             </div>
 
                             <div style={{ marginBottom: '1rem' }}>

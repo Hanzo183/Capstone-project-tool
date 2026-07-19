@@ -11,20 +11,78 @@ interface ReviewRound {
     endDate: string;
 }
 
+interface ProjectOption {
+    id: string;
+    title: string;
+}
+
 interface ExtendedReviewSlot extends ReviewSlot {
     status: 'Scheduled' | 'Completed' | 'InProgress' | 'Cancelled';
     roundId: string;
+    durationMinutes: number;
 }
+
+interface SlotFormState {
+    roundId: string;
+    projectId: string;
+    reviewDate: string;
+    room: string;
+    durationMinutes: string;
+    councilMemberIds: string;
+    type: 'Initial Review' | 'Final Defense';
+}
+
+const defaultSlotForm: SlotFormState = {
+    roundId: '',
+    projectId: '',
+    reviewDate: '',
+    room: '',
+    durationMinutes: '60',
+    councilMemberIds: '',
+    type: 'Initial Review'
+};
+
+const canManageSchedule = (role: string | null) =>
+    role === 'Admin' || role === 'Lecturer' || role === 'CouncilMember';
+
+const toDateInputValue = (value: string) => {
+    if (!value || value === 'Not scheduled') return '';
+    return value.includes('T') ? value.slice(0, 16) : value.replace(' ', 'T').slice(0, 16);
+};
+
+const toDisplayTime = (value: string) => {
+    if (!value || value === 'Not scheduled') return 'Not scheduled';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return value;
+    return parsed.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+};
+
+const toDisplayDate = (value: string) =>
+    new Date(`${value}T00:00:00`).toLocaleDateString(undefined, {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+    });
 
 export default function ReviewCalendar() {
     const [slots, setSlots] = useState<ExtendedReviewSlot[]>([]);
     const [rounds, setRounds] = useState<ReviewRound[]>([]);
+    const [projects, setProjects] = useState<ProjectOption[]>([]);
     const [selectedRoundId, setSelectedRoundId] = useState<string>('all');
     const [selectedDateSlots, setSelectedDateSlots] = useState<ExtendedReviewSlot[]>([]);
     const [selectedDate, setSelectedDate] = useState<string | null>(null);
+    const [showSlotForm, setShowSlotForm] = useState(false);
+    const [editingSlotId, setEditingSlotId] = useState<string | null>(null);
+    const [slotForm, setSlotForm] = useState<SlotFormState>(defaultSlotForm);
+    const [formError, setFormError] = useState('');
+    const [isSaving, setIsSaving] = useState(false);
+
+    const role = localStorage.getItem('role');
+    const userCanManage = canManageSchedule(role);
 
     const [currentYear, setCurrentYear] = useState(2026);
-    const [currentMonth, setCurrentMonth] = useState(5); // June (0-indexed represents June as month 5)
+    const [currentMonth, setCurrentMonth] = useState(5);
 
     const monthNames = [
         'January', 'February', 'March', 'April', 'May', 'June',
@@ -33,57 +91,48 @@ export default function ReviewCalendar() {
 
     const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+    const mapSlot = (s: any, idx: number, projectTitles: Record<string, string>): ExtendedReviewSlot => ({
+        id: s.id || `S${idx}`,
+        projectId: s.projectId || '',
+        projectTitle: s.projectTitle || projectTitles[s.projectId] || s.title || 'Untitled Project',
+        room: s.room || 'Room TBD',
+        time: s.time || s.reviewDate || 'Not scheduled',
+        council: s.council || s.councilMemberIds || s.reviewerIds || [],
+        type: (s.type || 'Initial Review') as 'Initial Review' | 'Final Defense',
+        status: (s.status || 'Scheduled') as ExtendedReviewSlot['status'],
+        roundId: s.roundId || '',
+        durationMinutes: s.durationMinutes || 60
+    });
+
     const loadCalendarData = async () => {
         try {
-            // Get Review Rounds
-            let roundsData: any[] = [];
-            try {
-                roundsData = await api.getReviewRounds();
-            } catch (err) {
-                console.warn("Failed to fetch rounds, using fallback:", err);
-            }
+            const [roundsData, slotsData, projectsData] = await Promise.all([
+                api.getReviewRounds().catch(() => []),
+                api.getScheduleSlots().catch(() => []),
+                api.getProjects().catch(() => [])
+            ]);
 
-            if (!roundsData || roundsData.length === 0) {
-                roundsData = [
-                    { id: 'RND101', name: 'Spring 2026 - Iteration 1', startDate: '2026-06-01', endDate: '2026-06-30' },
-                    { id: 'RND102', name: 'Spring 2026 - Final Defense', startDate: '2026-07-01', endDate: '2026-07-15' }
-                ];
-            }
-            setRounds(roundsData);
+            const realRounds = Array.isArray(roundsData) ? roundsData : [];
+            const realProjects = (Array.isArray(projectsData) ? projectsData : []).map((project: any) => ({
+                id: project.id,
+                title: project.title || project.topicName || project.id
+            }));
+            const projectTitles = realProjects.reduce<Record<string, string>>((map, project) => {
+                map[project.id] = project.title;
+                return map;
+            }, {});
+            const realSlots = (Array.isArray(slotsData) ? slotsData : [])
+                .map((slot: any, idx: number) => mapSlot(slot, idx, projectTitles));
 
-            // Get Review Slots
-            let slotsData: any[] = [];
-            try {
-                slotsData = await api.getScheduleSlots();
-            } catch (err) {
-                console.warn("Failed to fetch slots, using fallback:", err);
-            }
+            setRounds(realRounds);
+            setProjects(realProjects);
+            setSlots(realSlots);
 
-            if (!slotsData || slotsData.length === 0) {
-                slotsData = [
-                    { id: 'R1', projectId: 'P101', projectTitle: 'Microservices E-Commerce App', room: 'Alpha 105', time: '2026-06-25 10:00 AM', council: ['Dr. Nguyen Van A', 'Prof. Le C'], type: 'Initial Review', status: 'Completed', roundId: 'RND101' },
-                    { id: 'R2', projectId: 'P102', projectTitle: 'AI Smart Agriculture Tracking', room: 'Beta 202', time: '2026-06-25 02:00 PM', council: ['Dr. Nguyen Van A', 'Prof. Le C'], type: 'Initial Review', status: 'InProgress', roundId: 'RND101' },
-                    { id: 'R3', projectId: 'P103', projectTitle: 'Blockchain Supply Chain Ledger', room: 'Alpha 108', time: '2026-06-26 09:00 AM', council: ['Dr. Tran B', 'Dr. Nguyen Van A'], type: 'Initial Review', status: 'Scheduled', roundId: 'RND101' },
-                    { id: 'R4', projectId: 'P104', projectTitle: 'IoT Weather Forecasting Station', room: 'Alpha 105', time: '2026-07-05 10:00 AM', council: ['Dr. Tran B', 'Prof. Le C'], type: 'Final Defense', status: 'Scheduled', roundId: 'RND102' }
-                ];
-            } else {
-                // Ensure all keys are mapped
-                slotsData = slotsData.map((s, idx) => ({
-                    id: s.id || `S${idx}`,
-                    projectId: s.projectId || 'P_UNKNOWN',
-                    projectTitle: s.projectTitle || s.title || 'Untitled Project',
-                    room: s.room || 'Room Alpha',
-                    time: s.time || s.reviewDate || '2026-06-25 10:00 AM',
-                    council: s.council || s.reviewerIds || ['Unassigned Council'],
-                    type: s.type || 'Initial Review',
-                    status: s.status || 'Scheduled',
-                    roundId: s.roundId || 'RND101'
-                }));
+            if (selectedDate) {
+                setSelectedDateSlots(realSlots.filter(slot => slot.time.startsWith(selectedDate)));
             }
-
-            setSlots(slotsData);
         } catch (err) {
-            console.error("Calendar Load Error:", err);
+            console.error('Calendar Load Error:', err);
         }
     };
 
@@ -91,27 +140,21 @@ export default function ReviewCalendar() {
         loadCalendarData();
     }, []);
 
-    // Filter slots based on selected round
-    const filteredSlots = slots.filter(slot => {
-        if (selectedRoundId === 'all') return true;
-        return slot.roundId === selectedRoundId;
-    });
+    const filteredSlots = slots.filter(slot => selectedRoundId === 'all' || slot.roundId === selectedRoundId);
 
-    // Helper to get number of days in month
-    const getDaysInMonth = (year: number, month: number) => {
-        return new Date(year, month + 1, 0).getDate();
-    };
-
-    // Helper to get start day of the month (0 = Sunday, 1 = Monday, etc.)
-    const getFirstDayOfMonth = (year: number, month: number) => {
-        return new Date(year, month, 1).getDay();
-    };
+    const getDaysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate();
+    const getFirstDayOfMonth = (year: number, month: number) => new Date(year, month, 1).getDay();
 
     const daysCount = getDaysInMonth(currentYear, currentMonth);
     const startDay = getFirstDayOfMonth(currentYear, currentMonth);
-
     const blankDays = Array(startDay).fill(null);
     const daysArray = Array.from({ length: daysCount }, (_, i) => i + 1);
+
+    const formatSlotDateString = (day: number) => {
+        const mm = String(currentMonth + 1).padStart(2, '0');
+        const dd = String(day).padStart(2, '0');
+        return `${currentYear}-${mm}-${dd}`;
+    };
 
     const handlePrevMonth = () => {
         if (currentMonth === 0) {
@@ -135,19 +178,105 @@ export default function ReviewCalendar() {
         setSelectedDateSlots([]);
     };
 
-    const formatSlotDateString = (day: number) => {
-        const mm = String(currentMonth + 1).padStart(2, '0');
-        const dd = String(day).padStart(2, '0');
-        return `${currentYear}-${mm}-${dd}`;
-    };
-
     const handleDayClick = (day: number) => {
         const dateStr = formatSlotDateString(day);
-        const daySlots = filteredSlots.filter(slot => {
-            return slot.time.startsWith(dateStr);
-        });
         setSelectedDate(dateStr);
-        setSelectedDateSlots(daySlots);
+        setSelectedDateSlots(filteredSlots.filter(slot => slot.time.startsWith(dateStr)));
+    };
+
+    const openCreateForm = () => {
+        setEditingSlotId(null);
+        setFormError('');
+        setSlotForm({
+            ...defaultSlotForm,
+            roundId: selectedRoundId === 'all' ? (rounds[0]?.id || '') : selectedRoundId,
+            projectId: projects[0]?.id || '',
+            reviewDate: `${selectedDate || formatSlotDateString(1)}T09:00`
+        });
+        setShowSlotForm(true);
+    };
+
+    const openEditForm = (slot: ExtendedReviewSlot) => {
+        setEditingSlotId(slot.id);
+        setFormError('');
+        setSlotForm({
+            roundId: slot.roundId,
+            projectId: slot.projectId,
+            reviewDate: toDateInputValue(slot.time),
+            room: slot.room,
+            durationMinutes: String(slot.durationMinutes || 60),
+            councilMemberIds: slot.council.join(', '),
+            type: slot.type
+        });
+        setShowSlotForm(true);
+    };
+
+    const handleSlotSubmit = async (event: React.FormEvent) => {
+        event.preventDefault();
+        setFormError('');
+
+        const councilMemberIds = slotForm.councilMemberIds
+            .split(',')
+            .map(memberId => memberId.trim())
+            .filter(Boolean);
+
+        if (!slotForm.roundId || !slotForm.projectId || !slotForm.reviewDate || !slotForm.room.trim()) {
+            setFormError('Round, project, review date, and room are required.');
+            return;
+        }
+
+        if (councilMemberIds.length === 0) {
+            setFormError('At least one council member ID is required.');
+            return;
+        }
+
+        const durationMinutes = Number(slotForm.durationMinutes);
+        if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+            setFormError('Duration must be greater than 0 minutes.');
+            return;
+        }
+
+        const payload = {
+            roundId: slotForm.roundId,
+            projectId: slotForm.projectId,
+            reviewDate: slotForm.reviewDate,
+            room: slotForm.room.trim(),
+            durationMinutes,
+            councilMemberIds
+        };
+
+        try {
+            setIsSaving(true);
+            if (editingSlotId) {
+                await api.updateScheduleSlot(editingSlotId, payload);
+            } else {
+                await api.createScheduleSlot(payload);
+            }
+            setShowSlotForm(false);
+            setEditingSlotId(null);
+            await loadCalendarData();
+        } catch (err: any) {
+            setFormError(err.message || 'Failed to save schedule slot.');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const handleDeleteSlot = async (slot: ExtendedReviewSlot) => {
+        if (!window.confirm(`Delete schedule slot for "${slot.projectTitle}"?`)) {
+            return;
+        }
+
+        try {
+            await api.deleteScheduleSlot(slot.id);
+            if (editingSlotId === slot.id) {
+                setShowSlotForm(false);
+                setEditingSlotId(null);
+            }
+            await loadCalendarData();
+        } catch (err: any) {
+            alert(err.message || 'Failed to delete schedule slot.');
+        }
     };
 
     return (
@@ -157,13 +286,19 @@ export default function ReviewCalendar() {
                     <h2 className="calendar-view-title">Review Calendar</h2>
                     <p className="calendar-view-subtitle">Filter by rounds and click dates to view schedule slots</p>
                 </div>
-                
+
                 <div className="calendar-actions-filter-bar">
+                    {userCanManage && (
+                        <button className="btn-manage-slot primary" onClick={openCreateForm}>
+                            Create Schedule
+                        </button>
+                    )}
+
                     <div className="filter-select-wrapper">
                         <label htmlFor="round-filter-dropdown" className="filter-label">Round Filter:</label>
-                        <select 
+                        <select
                             id="round-filter-dropdown"
-                            value={selectedRoundId} 
+                            value={selectedRoundId}
                             onChange={(e) => {
                                 setSelectedRoundId(e.target.value);
                                 setSelectedDate(null);
@@ -186,8 +321,107 @@ export default function ReviewCalendar() {
                 </div>
             </div>
 
+            {userCanManage && showSlotForm && (
+                <form className="schedule-editor-panel" onSubmit={handleSlotSubmit}>
+                    <div className="schedule-editor-header">
+                        <h3>{editingSlotId ? 'Update Schedule' : 'Create Schedule'}</h3>
+                        <button type="button" className="btn-manage-slot ghost" onClick={() => setShowSlotForm(false)}>
+                            Close
+                        </button>
+                    </div>
+
+                    {formError && <p className="schedule-form-error">{formError}</p>}
+
+                    <div className="schedule-form-grid">
+                        <label>
+                            Round
+                            <select value={slotForm.roundId} onChange={(e) => setSlotForm({ ...slotForm, roundId: e.target.value })} required>
+                                <option value="">Select round</option>
+                                {rounds.map(round => (
+                                    <option key={round.id} value={round.id}>{round.name}</option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <label>
+                            Project
+                            <select value={slotForm.projectId} onChange={(e) => setSlotForm({ ...slotForm, projectId: e.target.value })} required>
+                                <option value="">Select project</option>
+                                {projects.map(project => (
+                                    <option key={project.id} value={project.id}>{project.title}</option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <label>
+                            Review Date
+                            <input
+                                type="datetime-local"
+                                value={slotForm.reviewDate}
+                                onChange={(e) => setSlotForm({ ...slotForm, reviewDate: e.target.value })}
+                                required
+                            />
+                        </label>
+
+                        <label>
+                            Room
+                            <input
+                                type="text"
+                                value={slotForm.room}
+                                onChange={(e) => setSlotForm({ ...slotForm, room: e.target.value })}
+                                placeholder="Alpha 105"
+                                required
+                            />
+                        </label>
+
+                        <label>
+                            Duration
+                            <input
+                                type="number"
+                                min="1"
+                                value={slotForm.durationMinutes}
+                                onChange={(e) => setSlotForm({ ...slotForm, durationMinutes: e.target.value })}
+                                required
+                            />
+                        </label>
+
+                        <label>
+                            Type
+                            <select value={slotForm.type} onChange={(e) => setSlotForm({ ...slotForm, type: e.target.value as SlotFormState['type'] })}>
+                                <option value="Initial Review">Initial Review</option>
+                                <option value="Final Defense">Final Defense</option>
+                            </select>
+                        </label>
+
+                        <label className="schedule-form-wide">
+                            Council Member IDs
+                            <input
+                                type="text"
+                                value={slotForm.councilMemberIds}
+                                onChange={(e) => setSlotForm({ ...slotForm, councilMemberIds: e.target.value })}
+                                placeholder="USR001, SE192879"
+                                required
+                            />
+                        </label>
+                    </div>
+
+                    <div className="schedule-form-actions">
+                        <button type="submit" className="btn-manage-slot primary" disabled={isSaving}>
+                            {isSaving ? 'Saving...' : editingSlotId ? 'Update Schedule' : 'Create Schedule'}
+                        </button>
+                        {editingSlotId && (
+                            <button type="button" className="btn-manage-slot danger" onClick={() => {
+                                const slot = slots.find(item => item.id === editingSlotId);
+                                if (slot) handleDeleteSlot(slot);
+                            }}>
+                                Delete Schedule
+                            </button>
+                        )}
+                    </div>
+                </form>
+            )}
+
             <div className="calendar-content-split">
-                {/* Calendar Grid View */}
                 <div className="calendar-main-grid">
                     <div className="calendar-legend">
                         <div className="legend-item">
@@ -222,23 +456,20 @@ export default function ReviewCalendar() {
 
                             {daysArray.map(day => {
                                 const dateStr = formatSlotDateString(day);
-                                const dailyEvents = filteredSlots.filter(slot => {
-                                    return slot.time.startsWith(dateStr);
-                                });
-
+                                const dailyEvents = filteredSlots.filter(slot => slot.time.startsWith(dateStr));
                                 const isSelected = selectedDate === dateStr;
 
                                 return (
-                                    <div 
-                                        key={day} 
+                                    <div
+                                        key={day}
                                         onClick={() => handleDayClick(day)}
                                         className={`matrix-cell ${dailyEvents.length > 0 ? 'has-events' : ''} ${isSelected ? 'selected-day' : ''}`}
                                     >
                                         <span className="day-number">{day}</span>
                                         <div className="cell-events-container">
                                             {dailyEvents.map(event => (
-                                                <div 
-                                                    key={event.id} 
+                                                <div
+                                                    key={event.id}
                                                     className={`calendar-event-pill status-${event.status.toLowerCase()}`}
                                                     title={event.projectTitle}
                                                 >
@@ -253,16 +484,15 @@ export default function ReviewCalendar() {
                     </div>
                 </div>
 
-                {/* Day Slots Details Side Panel */}
                 <div className="calendar-details-panel">
                     <div className="details-panel-header">
-                        <h3>Slots for {selectedDate ? new Date(selectedDate).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : 'Select a date'}</h3>
+                        <h3>Slots for {selectedDate ? toDisplayDate(selectedDate) : 'Select a date'}</h3>
                     </div>
-                    
+
                     <div className="details-panel-content">
                         {!selectedDate ? (
                             <div className="no-selection-prompt">
-                                <span className="prompt-icon">📅</span>
+                                <span className="prompt-icon">Calendar</span>
                                 <p>Click on any highlighted date in the calendar to view its assigned defense review slots.</p>
                             </div>
                         ) : selectedDateSlots.length === 0 ? (
@@ -277,10 +507,21 @@ export default function ReviewCalendar() {
                                         </div>
                                         <h4 className="slot-project-title">{slot.projectTitle}</h4>
                                         <div className="slot-meta-items">
-                                            <p>📍 Room: <strong>{slot.room}</strong></p>
-                                            <p>⏰ Time: <strong>{slot.time.split(' ')[1] + ' ' + (slot.time.split(' ')[2] || '')}</strong></p>
-                                            <p>👥 Reviewers: {slot.council.join(', ')}</p>
+                                            <p>Room: <strong>{slot.room}</strong></p>
+                                            <p>Time: <strong>{toDisplayTime(slot.time)}</strong></p>
+                                            <p>Duration: <strong>{slot.durationMinutes} minutes</strong></p>
+                                            <p>Reviewers: {slot.council.length > 0 ? slot.council.join(', ') : 'Unassigned'}</p>
                                         </div>
+                                        {userCanManage && (
+                                            <div className="slot-management-actions">
+                                                <button type="button" className="btn-manage-slot" onClick={() => openEditForm(slot)}>
+                                                    Update
+                                                </button>
+                                                <button type="button" className="btn-manage-slot danger" onClick={() => handleDeleteSlot(slot)}>
+                                                    Delete
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
                                 ))}
                             </div>

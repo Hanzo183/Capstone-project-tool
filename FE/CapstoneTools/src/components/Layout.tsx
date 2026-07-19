@@ -10,7 +10,7 @@ export default function Layout() {
 
     const [unreadCount, setUnreadCount] = useState<number>(() => {
         const val = localStorage.getItem('unreadNotificationsCount');
-        return val ? parseInt(val) : 3;
+        return val ? parseInt(val) : 0;
     });
 
     useEffect(() => {
@@ -64,7 +64,7 @@ export default function Layout() {
                             to="/submissions"
                             className={({ isActive }) => `nav-anchor-link ${isActive ? 'active-node' : ''}`}
                         >
-                            <span className="link-icon">📤</span> Submissions
+                            <span className="link-icon">📤</span> {role === 'Lecturer' ? 'Review Submission' : 'Submissions'}
                         </NavLink>
                     )}
 
@@ -86,18 +86,8 @@ export default function Layout() {
                         <span className="link-icon">📅</span> Review Calendar
                     </NavLink>
 
-                    {/* Admin Panel (Admin Only) */}
-                    {role === 'Admin' && (
-                        <NavLink
-                            to="/admin/users"
-                            className={({ isActive }) => `nav-anchor-link ${isActive ? 'active-node' : ''}`}
-                        >
-                            <span className="link-icon">👥</span> User Management
-                        </NavLink>
-                    )}
-
-                    {/* Reports (Admin & Lecturer) */}
-                    {(role === 'Admin' || role === 'Lecturer') && (
+                    {/* Reports (Lecturer) */}
+                    {role === 'Lecturer' && (
                         <NavLink
                             to="/reports"
                             className={({ isActive }) => `nav-anchor-link ${isActive ? 'active-node' : ''}`}

@@ -70,16 +70,16 @@ export default function AdminDashboard() {
 
                 // Fetch users from Identity Service
                 const usersData = await api.getUsers();
-                setUsers(usersData);
+                setUsers(Array.isArray(usersData) ? usersData : []);
 
                 // Fetch projects from Project Service
                 const projectsData = await api.getProjects();
-                setProjects(projectsData);
+                setProjects(Array.isArray(projectsData) ? projectsData : []);
 
                 // Fetch rounds from Scheduling Service
                 try {
                     const roundsData = await api.getReviewRounds();
-                    setRounds(roundsData);
+                    setRounds(Array.isArray(roundsData) ? roundsData : []);
                 } catch (err) {
                     console.warn('Could not fetch rounds:', err);
                     setRounds([]);
@@ -133,7 +133,7 @@ export default function AdminDashboard() {
 
             // Refresh rounds
             const roundsData = await api.getReviewRounds();
-            setRounds(roundsData);
+            setRounds(Array.isArray(roundsData) ? roundsData : []);
         } catch  {
             alert('❌ Failed to create review round.');
         }
@@ -153,12 +153,12 @@ export default function AdminDashboard() {
         }
 
         if (newUser.role === 'Student' && !newUser.studentId.trim()) {
-            alert('Student ID is required for student accounts.');
+            alert('ID is required for student accounts.');
             return;
         }
 
         if (newUser.studentId.trim() && !studentIdPattern.test(newUser.studentId.trim())) {
-            alert('Student ID must start with 2 letters followed by 6 numbers, for example SE192706.');
+            alert('ID must start with 2 letters followed by 6 numbers, for example SE192706.');
             return;
         }
 
@@ -182,25 +182,21 @@ export default function AdminDashboard() {
 
             // Refresh users
             const usersData = await api.getUsers();
-            setUsers(usersData);
+            setUsers(Array.isArray(usersData) ? usersData : []);
         } catch  {
-            alert('❌ Failed to create user. Email or Student ID may already exist.');
+            alert('Failed to create user. Email or ID may already exist.');
         }
     };
 
     // --- HANDLE UPDATE USER ROLE ---
-    const handleUpdateRole = async (userId: string, currentRole: string) => {
-        const roles = ['Student', 'Lecturer', 'CouncilMember', 'Admin'];
-        const currentIndex = roles.indexOf(currentRole);
-        const nextRole = roles[(currentIndex + 1) % roles.length];
-
+    const handleUpdateRole = async (userId: string, nextRole: string) => {
         if (window.confirm(`Change user role to "${nextRole}"?`)) {
             try {
                 await api.updateUserRole(userId, nextRole);
                 alert('✅ User role updated!');
                 // Refresh users
                 const usersData = await api.getUsers();
-                setUsers(usersData);
+                setUsers(Array.isArray(usersData) ? usersData : []);
             } catch  {
                 alert('❌ Failed to update user role.');
             }
@@ -373,21 +369,25 @@ export default function AdminDashboard() {
                                                     </td>
                                                     <td>
                                                         <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
-                                                            <button
+                                                            <select
                                                                 className="row-action-btn"
-                                                                onClick={() => handleUpdateRole(user.id, user.role)}
+                                                                value={user.role || 'Student'}
+                                                                onChange={(e) => handleUpdateRole(user.id, e.target.value)}
                                                                 style={{
-                                                                    padding: '0.2rem 0.6rem',
-                                                                    background: '#3b82f6',
-                                                                    color: 'white',
-                                                                    border: 'none',
+                                                                    padding: '0.2rem 0.5rem',
+                                                                    background: '#ffffff',
+                                                                    color: '#1f2937',
+                                                                    border: '1px solid #cbd5e1',
                                                                     borderRadius: '4px',
                                                                     cursor: 'pointer',
                                                                     fontSize: '0.75rem'
                                                                 }}
                                                             >
-                                                                Change Role
-                                                            </button>
+                                                                <option value="Student">Student</option>
+                                                                <option value="Lecturer">Lecturer</option>
+                                                                <option value="CouncilMember">Council Member</option>
+                                                                <option value="Admin">Admin</option>
+                                                            </select>
                                                             <button
                                                                 className="row-action-btn"
                                                                 onClick={() => handleToggleStatus(user.id, user.isActive)}
@@ -441,7 +441,7 @@ export default function AdminDashboard() {
                                 <div className="operation-item-box">
                                     <div className="op-info">
                                         <h5>Message Broker Exchange</h5>
-                                        <p>RabbitMQ exchange status checking</p>
+                                        <p>Kafka exchange status checking</p>
                                     </div>
                                     <span className="broker-status-tag healthy" style={{
                                         padding: '0.2rem 0.8rem',
@@ -661,13 +661,13 @@ export default function AdminDashboard() {
                             </div>
                             <div style={{ marginBottom: '1rem' }}>
                                 <label style={{ display: 'block', marginBottom: '0.25rem', fontWeight: '500' }}>
-                                    Student ID
+                                    ID
                                 </label>
                                 <input
                                     type="text"
                                     placeholder="SE123456"
                                     pattern="[A-Za-z]{2}[0-9]{6}"
-                                    title="Student ID must start with 2 letters followed by 6 numbers, for example SE192706."
+                                    title="ID must start with 2 letters followed by 6 numbers, for example SE192706."
                                     required={newUser.role === 'Student'}
                                     value={newUser.studentId}
                                     onChange={(e) => setNewUser({ ...newUser, studentId: e.target.value })}

@@ -159,8 +159,9 @@ export default function SubmissionsPage() {
                 setErrorMsg('');
 
                 // Get all projects
-                const projectsData = await api.getProjects();
-                setProjects(projectsData || []);
+                const projectsResponse = await api.getProjects();
+                const projectsData = Array.isArray(projectsResponse) ? projectsResponse : [];
+                setProjects(projectsData);
 
                 // For Lecturer: filter projects they supervise
                 if (role === 'Lecturer') {
@@ -177,6 +178,8 @@ export default function SubmissionsPage() {
                     const studentProject = projectsData[0];
                     if (studentProject) {
                         setSelectedProjectId(studentProject.id);
+                    } else {
+                        setErrorMsg('You do not have a group yet, so you cannot submit a project.');
                     }
                 }
             } catch (err) {
@@ -199,7 +202,12 @@ export default function SubmissionsPage() {
     // --- UPLOAD FILE ---
     const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
-        if (!file || !projectId) return;
+        if (!file) return;
+        if (!projectId) {
+            alert('You do not have a group yet, so you cannot submit a project.');
+            event.target.value = '';
+            return;
+        }
 
         const allowedExtensions = ['.pdf', '.doc', '.docx', '.zip'];
         const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
@@ -289,7 +297,11 @@ export default function SubmissionsPage() {
         try {
             // Get the current round for this project
             const project = projects.find(p => p.id === selectedProjectId);
-            const roundId = project?.roundId || 'RND-2025A'; // Fallback to default
+            const roundId = project?.roundId;
+            if (!roundId) {
+                alert('This project does not have a review round assigned.');
+                return;
+            }
 
             await api.createEvaluation({
                 projectId: selectedProjectId,

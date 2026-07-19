@@ -16,51 +16,52 @@ interface BackendSubmission {
 
 export default function StudentDashboard() {
     const [currentProject, setCurrentProject] = useState<Project>({
-        id: '...',
-        title: 'Loading project context...',
-        team: '...',
-        lecturer: '...',
+        id: '',
+        title: '',
+        team: '',
+        lecturer: '',
         status: 'Draft' as ProjectStatus,
-        round: '...',
+        round: '',
         score: 0,
-        updatedAt: '...'
+        updatedAt: ''
     });
 
     const [submissions, setSubmissions] = useState<Submission[]>([]);
     const [scheduleTimeline, setScheduleTimeline] = useState<ScheduleEvent[]>([]);
     const [upcomingSlot, setUpcomingSlot] = useState<ReviewSlot | null>(null);
     const [isLoading, setIsLoading] = useState(true);
-    const [isRefreshing, setIsRefreshing] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
     const [errorMsg, setErrorMsg] = useState('');
 
-    const loadDashboardData = async (showRefreshAnimation = false) => {
-        if (showRefreshAnimation) {
-            setIsRefreshing(true);
-        } else {
-            setIsLoading(true);
-        }
+    const loadDashboardData = async () => {
+        setIsLoading(true);
         setErrorMsg('');
         try {
             const projectData = await api.getProjects();
+            const projectsData = Array.isArray(projectData) ? projectData : [];
 
-            if (projectData && projectData.length > 0) {
-                const activeRes = projectData[0];
+            if (projectsData.length > 0) {
+                const activeRes = projectsData[0];
                 const projectId = activeRes.id;
 
                 setCurrentProject({
-                    id: projectId || 'N/A',
-                    title: activeRes.topicName || activeRes.title || 'Untitled Topic',
-                    team: activeRes.groupCode || activeRes.teamName || 'No Group',
-                    lecturer: activeRes.supervisorId || activeRes.lecturerId || 'Unassigned Mentor',
+                    id: projectId || '',
+                    title: activeRes.title || activeRes.topicName || '',
+                    team: activeRes.teamId || activeRes.groupCode || activeRes.teamName || '',
+                    lecturer: activeRes.lecturerId || activeRes.supervisorId || '',
                     status: (activeRes.status || 'Draft') as ProjectStatus,
-                    round: activeRes.roundId || 'Iteration 1',
+                    round: activeRes.roundId || '',
                     score: activeRes.score || 0,
-                    updatedAt: activeRes.createdAt ? new Date(activeRes.createdAt).toLocaleDateString() : 'Recent'
+                    updatedAt: activeRes.updatedAt || activeRes.createdAt
+                        ? new Date(activeRes.updatedAt || activeRes.createdAt).toLocaleDateString()
+                        : ''
                 });
 
                 if (projectId) {
-                    const submissionData = await api.getSubmissions(projectId);
+                    const submissionResponse = await api.getSubmissions(projectId);
+                    const submissionData = Array.isArray(submissionResponse)
+                        ? submissionResponse
+                        : (Array.isArray(submissionResponse?.items) ? submissionResponse.items : []);
                     
                     const mappedSubmissions: Submission[] = submissionData.map((sub: BackendSubmission) => {
                         let subStatus: "Pending" | "Evaluated" = "Pending";
@@ -111,8 +112,8 @@ export default function StudentDashboard() {
                                 projectTitle: activeRes.topicName || activeRes.title || 'Your Project',
                                 room: projectSlot.room || 'TBD',
                                 time: projectSlot.reviewDate ? new Date(projectSlot.reviewDate).toLocaleString() : 'TBD',
-                                council: projectSlot.reviewerIds || ['Reviewers Unassigned'],
-                                type: 'Presentation'
+                                council: projectSlot.councilMemberIds || projectSlot.reviewerIds || projectSlot.council || [],
+                                type: 'Initial Review'
                             });
                         } else {
                             setUpcomingSlot(null);
@@ -123,14 +124,14 @@ export default function StudentDashboard() {
                     }
                 }
             } else {
-                setErrorMsg('No active project records found for your account entry.');
+                setCurrentProject(prev => ({ ...prev, id: '' }));
+                setErrorMsg('You do not have a group yet, so you cannot submit a project.');
             }
         } catch (err) {
             console.error("API Connection Failure:", err);
             setErrorMsg('Could not sync workspace with Project Service.');
         } finally {
             setIsLoading(false);
-            setIsRefreshing(false);
         }
     };
 
@@ -140,7 +141,12 @@ export default function StudentDashboard() {
 
     const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
-        if (!file || currentProject.id === '...') return;
+        if (!file) return;
+        if (!currentProject.id) {
+            alert('You do not have a group yet, so you cannot submit a project.');
+            event.target.value = '';
+            return;
+        }
 
         setIsUploading(true);
         setErrorMsg('');
@@ -173,7 +179,7 @@ export default function StudentDashboard() {
 
     // ✅ FIXED: Download function for dashboard
     const handleDownload = async (storedName: string, displayName: string) => {
-        if (!currentProject.id || currentProject.id === '...') {
+        if (!currentProject.id) {
             alert('No project selected.');
             return;
         }
@@ -228,7 +234,7 @@ export default function StudentDashboard() {
                     <span className="error-card-icon">⚠️</span>
                     <h3>Sync Connection Interrupted</h3>
                     <p>{errorMsg || 'Could not connect to the project database repository. Ensure your server is running and try again.'}</p>
-                    <button onClick={() => loadDashboardData(false)} className="btn-retry-action">
+                    <button onClick={() => loadDashboardData()} className="btn-retry-action">
                         🔄 Retry Sync
                     </button>
                 </div>
@@ -243,14 +249,6 @@ export default function StudentDashboard() {
                     <h2>Student Workspace</h2>
                     <p className="welcome-text">Track your capstone progress, submissions, and upcoming review slots.</p>
                 </div>
-                <button 
-                    onClick={() => loadDashboardData(true)} 
-                    disabled={isLoading || isRefreshing}
-                    className={`btn-refresh-dashboard ${isRefreshing ? 'refresh-spinning' : ''}`}
-                    title="Reload Workspace Data"
-                >
-                    🔄 {isRefreshing ? 'Syncing...' : 'Sync Data'}
-                </button>
             </header>
 
             {errorMsg && !currentProject.id && renderErrorState()}
@@ -360,7 +358,7 @@ export default function StudentDashboard() {
                                         type="file"
                                         style={{ display: 'none' }}
                                         onChange={handleFileUpload}
-                                        disabled={isUploading || currentProject.id === '...'}
+                                        disabled={isUploading || !currentProject.id}
                                         accept=".pdf,.docx,.doc,.zip"
                                     />
                                 </label>
