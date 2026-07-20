@@ -49,8 +49,8 @@ export default function CouncilDashboard() {
     const [errorMsg, setErrorMsg] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
 
-    const userId = localStorage.getItem('userId') || 'C101';
-    const fullName = localStorage.getItem('fullName') || 'Dr. Nguyen Van A';
+    const userId = localStorage.getItem('userId') || 'CM001';
+    const fullName = localStorage.getItem('fullName') || 'Council Reviewer';
 
     // --- LOAD DATA ---
     const loadCouncilData = useCallback(async (showLoading: boolean = true) => {
@@ -63,7 +63,7 @@ export default function CouncilDashboard() {
         setSuccessMsg('');
 
         try {
-            // Get all projects
+            // --- 1. FETCH ALL PROJECTS ---
             let projectsData: any[] = [];
             try {
                 projectsData = await api.getProjects();
@@ -71,7 +71,7 @@ export default function CouncilDashboard() {
                 console.warn("Failed to fetch projects from API:", err);
             }
 
-            const parsedProjects: Project[] = (Array.isArray(projectsData) ? projectsData : []).map(p => ({
+            const parsedProjects: Project[] = (Array.isArray(projectsData) ? projectsData : []).map((p: any) => ({
                 id: p.id,
                 title: p.title || p.topicName || '',
                 team: p.teamId || p.team || p.groupCode || '',
@@ -81,36 +81,53 @@ export default function CouncilDashboard() {
                 updatedAt: p.updatedAt || p.createdAt || ''
             }));
 
-            // Fetch slots
+            // --- 2. CREATE PROJECTS MAP FOR QUICK LOOKUP ---
+            const projectsMap = parsedProjects.reduce<Record<string, Project>>((map, project) => {
+                map[project.id] = project;
+                return map;
+            }, {});
+
+            // --- 3. FETCH SCHEDULE SLOTS ---
             let slotsData: any[] = [];
             try {
                 slotsData = await api.getScheduleSlots();
+                console.log('📅 Raw schedule slots:', slotsData);
             } catch (err) {
                 console.warn("Failed to fetch slots from API:", err);
             }
 
+            // --- 4. MAP SLOTS WITH REAL PROJECT TITLES ---
             const upcoming = (Array.isArray(slotsData) ? slotsData : [])
-                .map((s: any, idx: number) => ({
-                    id: s.id || `S${idx}`,
-                    projectId: s.projectId || '',
-                    projectTitle: s.projectTitle || s.title || 'Untitled Project',
-                    room: s.room || 'Room TBD',
-                    time: s.time || s.reviewDate || 'Not scheduled',
-                    council: s.council || s.councilMemberIds || s.reviewerIds || [],
-                    type: s.type || 'Initial Review'
-                }))
-                .filter((s: ReviewSlot) => s.council.some((c: string) => c === userId || c === fullName));
+                .map((s: any) => {
+                    const project = projectsMap[s.projectId];
+                    return {
+                        id: s.id,
+                        projectId: s.projectId,
+                        projectTitle: project?.title || 'Unknown Project',
+                        room: s.room || 'Room TBD',
+                        time: s.reviewDate || s.time || 'Not scheduled',
+                        council: s.councilMemberIds || s.reviewerIds || [],
+                        type: s.type || 'Initial Review'
+                    };
+                })
+                .filter((s: ReviewSlot) => {
+                    // Only show slots where this council member is assigned
+                    return s.council.some((c: string) => c === userId || c === fullName);
+                });
 
+            console.log('📅 Mapped upcoming slots:', upcoming);
             setUpcomingSlots(upcoming);
 
+            // --- 5. ASSIGNED PROJECTS ---
             const assignedProjectIds = new Set(upcoming.map(slot => slot.projectId));
             const assigned = parsedProjects.filter(project => assignedProjectIds.has(project.id));
             setAssignedProjects(assigned);
 
-            // Evaluations to do: assigned projects with Submitted or In Review status
+            // --- 6. EVALUATIONS QUEUE ---
             const todo = assigned.filter(p => p.status === 'Submitted' || p.status === 'In Review');
             setEvaluationsTodo(todo);
 
+            // --- 7. FETCH REBUTTALS ---
             let rebuttalData: Rebuttal[] = [];
             try {
                 const [pendingRebuttals, evaluations] = await Promise.all([
@@ -511,7 +528,9 @@ export default function CouncilDashboard() {
                             <div className="slots-timeline-list">
                                 {upcomingSlots.map(slot => (
                                     <div key={slot.id} className="slot-timeline-card">
-                                        <div className="timeline-badge-time">{slot.time}</div>
+                                        <div className="timeline-badge-time">
+                                            {new Date(slot.time).toLocaleString()}
+                                        </div>
                                         <div className="slot-card-body">
                                             <h4>{slot.projectTitle}</h4>
                                             <p>Room: <strong>{slot.room}</strong> | Type: {slot.type}</p>
