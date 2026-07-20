@@ -272,7 +272,6 @@ export default function CouncilDashboard() {
             <header className="dashboard-header-block">
                 <div>
                     <h2 className="dashboard-main-title">Council Member Panel</h2>
-                    <p className="dashboard-subtitle">Manage assigned evaluations, student rebuttals, and upcoming schedules</p>
                 </div>
                 <button
                     className="refresh-btn"
@@ -286,7 +285,7 @@ export default function CouncilDashboard() {
                         borderRadius: '8px',
                         cursor: isRefreshing ? 'not-allowed' : 'pointer',
                         fontWeight: '600',
-                        display: 'flex',
+                        display: 'none',
                         alignItems: 'center',
                         gap: '0.5rem',
                         transition: 'background 0.2s'
