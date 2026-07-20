@@ -1,5 +1,5 @@
 // src/pages/CouncilDashboard.tsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import type { Project, ReviewSlot } from '../types';
 import './CouncilDashboard.css';
@@ -31,7 +31,7 @@ export default function CouncilDashboard() {
     const [evaluationsTodo, setEvaluationsTodo] = useState<Project[]>([]);
     const [rebuttals, setRebuttals] = useState<Rebuttal[]>([]);
     const [upcomingSlots, setUpcomingSlots] = useState<ReviewSlot[]>([]);
-    
+
     // Evaluation Form State
     const [selectedProjectForEval, setSelectedProjectForEval] = useState<Project | null>(null);
     const [evalScore, setEvalScore] = useState<number>(8);
@@ -45,15 +45,23 @@ export default function CouncilDashboard() {
     const [submittingRebuttal, setSubmittingRebuttal] = useState(false);
 
     const [isLoading, setIsLoading] = useState(true);
+    const [isRefreshing, setIsRefreshing] = useState(false);
     const [errorMsg, setErrorMsg] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
 
     const userId = localStorage.getItem('userId') || 'C101';
     const fullName = localStorage.getItem('fullName') || 'Dr. Nguyen Van A';
 
-    const loadCouncilData = async () => {
-        setIsLoading(true);
+    // --- LOAD DATA ---
+    const loadCouncilData = useCallback(async (showLoading: boolean = true) => {
+        if (showLoading) {
+            setIsLoading(true);
+        } else {
+            setIsRefreshing(true);
+        }
         setErrorMsg('');
+        setSuccessMsg('');
+
         try {
             // Get all projects
             let projectsData: any[] = [];
@@ -138,13 +146,37 @@ export default function CouncilDashboard() {
             console.error(err);
         } finally {
             setIsLoading(false);
+            setIsRefreshing(false);
+        }
+    }, [userId, fullName]);
+
+    // --- INITIAL LOAD + AUTO-REFRESH ON FOCUS ---
+    useEffect(() => {
+        loadCouncilData(true);
+
+        // Auto-refresh when page gets focus (user clicks back to tab)
+        const handleFocus = () => {
+            if (!isLoading && !isRefreshing) {
+                loadCouncilData(false);
+            }
+        };
+        window.addEventListener('focus', handleFocus);
+
+        return () => {
+            window.removeEventListener('focus', handleFocus);
+        };
+    }, [loadCouncilData]);
+
+    // --- MANUAL REFRESH ---
+    const handleRefresh = async () => {
+        await loadCouncilData(false);
+        if (!errorMsg) {
+            setSuccessMsg('✅ Data refreshed successfully!');
+            setTimeout(() => setSuccessMsg(''), 3000);
         }
     };
 
-    useEffect(() => {
-        loadCouncilData();
-    }, []);
-
+    // --- EVALUATION SUBMIT ---
     const handleEvaluationSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!selectedProjectForEval) return;
@@ -165,21 +197,23 @@ export default function CouncilDashboard() {
                 feedback: evalFeedback
             });
 
-            setSuccessMsg(`Successfully submitted evaluation for ${selectedProjectForEval.title}!`);
-            
-            // Remove project from TODO list
-            setEvaluationsTodo(prev => prev.filter(p => p.id !== selectedProjectForEval.id));
+            setSuccessMsg(`✅ Successfully submitted evaluation for ${selectedProjectForEval.title}!`);
+
+            // Refresh data after submit
+            await loadCouncilData(false);
+
             setSelectedProjectForEval(null);
             setEvalFeedback('');
             setEvalScore(8);
         } catch (err: any) {
             console.error("Failed to submit evaluation:", err);
-            setErrorMsg('Failed to submit evaluation. Please check the selected project round and try again.');
+            setErrorMsg('Failed to submit evaluation. Please try again.');
         } finally {
             setSubmittingEval(false);
         }
     };
 
+    // --- REBUTTAL SUBMIT ---
     const handleRebuttalSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!selectedRebuttal) return;
@@ -190,10 +224,11 @@ export default function CouncilDashboard() {
         try {
             await api.respondToRebuttal(selectedRebuttal.id, rebuttalResponse);
             await api.updateRebuttalStatus(selectedRebuttal.id, rebuttalDecision);
-            setSuccessMsg(`Successfully responded to rebuttal from ${selectedRebuttal.studentName}!`);
-            
-            // Update local state
-            setRebuttals(prev => prev.map(r => r.id === selectedRebuttal.id ? { ...r, status: rebuttalDecision, response: rebuttalResponse } : r));
+            setSuccessMsg(`✅ Successfully responded to rebuttal from ${selectedRebuttal.studentName}!`);
+
+            // Refresh data after submit
+            await loadCouncilData(false);
+
             setSelectedRebuttal(null);
             setRebuttalResponse('');
             setRebuttalDecision('Approved');
@@ -216,19 +251,66 @@ export default function CouncilDashboard() {
 
     return (
         <div className="council-dashboard-container">
+            {/* --- HEADER WITH REFRESH BUTTON --- */}
             <header className="dashboard-header-block">
                 <div>
                     <h2 className="dashboard-main-title">Council Member Panel</h2>
                     <p className="dashboard-subtitle">Manage assigned evaluations, student rebuttals, and upcoming schedules</p>
                 </div>
+                <button
+                    className="refresh-btn"
+                    onClick={handleRefresh}
+                    disabled={isRefreshing}
+                    style={{
+                        padding: '0.5rem 1.5rem',
+                        background: isRefreshing ? '#94a3b8' : '#3b82f6',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '8px',
+                        cursor: isRefreshing ? 'not-allowed' : 'pointer',
+                        fontWeight: '600',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        transition: 'background 0.2s'
+                    }}
+                >
+                    🔄 {isRefreshing ? 'Refreshing...' : 'Refresh Data'}
+                </button>
             </header>
 
-            {successMsg && <div className="toast-success-alert">✅ {successMsg}</div>}
-            {errorMsg && <div className="toast-error-alert">❌ {errorMsg}</div>}
+            {/* --- TOAST MESSAGES --- */}
+            {successMsg && (
+                <div className="toast-success-alert" style={{
+                    background: '#dcfce7',
+                    color: '#16a34a',
+                    padding: '0.75rem 1rem',
+                    borderRadius: '8px',
+                    marginBottom: '1rem',
+                    border: '1px solid #bbf7d0'
+                }}>
+                    ✅ {successMsg}
+                </div>
+            )}
+            {errorMsg && (
+                <div className="toast-error-alert" style={{
+                    background: '#fee2e2',
+                    color: '#dc2626',
+                    padding: '0.75rem 1rem',
+                    borderRadius: '8px',
+                    marginBottom: '1rem',
+                    border: '1px solid #fecaca'
+                }}>
+                    ❌ {errorMsg}
+                </div>
+            )}
 
+            {/* --- MAIN GRID --- */}
             <div className="dashboard-grid-layout">
-                {/* Left Side: Tasks queue */}
+                {/* LEFT: Tasks Queue */}
                 <div className="dashboard-primary-section">
+
+                    {/* Evaluations Queue */}
                     <section className="glass-card-section">
                         <h3 className="section-title-label">📋 Evaluations Queue</h3>
                         {evaluationsTodo.length === 0 ? (
@@ -241,8 +323,8 @@ export default function CouncilDashboard() {
                                             <h4>{project.title}</h4>
                                             <p>Team: <strong>{project.team}</strong> | Mentor: {project.lecturer}</p>
                                         </div>
-                                        <button 
-                                            className="action-btn-primary" 
+                                        <button
+                                            className="action-btn-primary"
                                             onClick={() => setSelectedProjectForEval(project)}
                                         >
                                             Evaluate
@@ -260,37 +342,37 @@ export default function CouncilDashboard() {
                             <form onSubmit={handleEvaluationSubmit} className="feedback-scoring-form">
                                 <div className="form-input-group">
                                     <label htmlFor="score-range-slider">Score (0 - 10): <span className="score-val-badge">{evalScore}</span></label>
-                                    <input 
-                                        type="range" 
-                                        id="score-range-slider" 
-                                        min="0" 
-                                        max="10" 
+                                    <input
+                                        type="range"
+                                        id="score-range-slider"
+                                        min="0"
+                                        max="10"
                                         step="0.5"
-                                        value={evalScore} 
-                                        onChange={(e) => setEvalScore(parseFloat(e.target.value))} 
+                                        value={evalScore}
+                                        onChange={(e) => setEvalScore(parseFloat(e.target.value))}
                                     />
                                 </div>
                                 <div className="form-input-group">
                                     <label htmlFor="evaluation-feedback-text">Feedback Comments</label>
-                                    <textarea 
-                                        id="evaluation-feedback-text" 
+                                    <textarea
+                                        id="evaluation-feedback-text"
                                         rows={4}
-                                        placeholder="Add constructive comments, strengths, weaknesses..." 
+                                        placeholder="Add constructive comments, strengths, weaknesses..."
                                         value={evalFeedback}
                                         onChange={(e) => setEvalFeedback(e.target.value)}
                                         required
                                     />
                                 </div>
                                 <div className="form-button-actions">
-                                    <button 
-                                        type="button" 
-                                        className="btn-cancel" 
+                                    <button
+                                        type="button"
+                                        className="btn-cancel"
                                         onClick={() => setSelectedProjectForEval(null)}
                                     >
                                         Cancel
                                     </button>
-                                    <button 
-                                        type="submit" 
+                                    <button
+                                        type="submit"
                                         className="btn-submit"
                                         disabled={submittingEval}
                                     >
@@ -301,7 +383,7 @@ export default function CouncilDashboard() {
                         </section>
                     )}
 
-                    {/* Rebuttals awaiting response */}
+                    {/* Rebuttals Awaiting Response */}
                     <section className="glass-card-section">
                         <h3 className="section-title-label">💬 Rebuttals Awaiting Response</h3>
                         {rebuttals.length === 0 ? (
@@ -315,15 +397,15 @@ export default function CouncilDashboard() {
                                             <span className="project-tag">{rebuttal.projectTitle}</span>
                                         </div>
                                         <p className="rebuttal-content-text">"{rebuttal.content}"</p>
-                                        
+
                                         {rebuttal.response ? (
                                             <div className="rebuttal-response-display">
                                                 <strong>Your response:</strong>
                                                 <p>{rebuttal.response}</p>
                                             </div>
                                         ) : (
-                                            <button 
-                                                className="action-btn-secondary" 
+                                            <button
+                                                className="action-btn-secondary"
                                                 onClick={() => {
                                                     setSelectedRebuttal(rebuttal);
                                                     setRebuttalResponse('');
@@ -358,19 +440,19 @@ export default function CouncilDashboard() {
                                 </div>
                                 <div className="form-input-group">
                                     <label htmlFor="rebuttal-response-text">Your Response Message</label>
-                                    <textarea 
-                                        id="rebuttal-response-text" 
+                                    <textarea
+                                        id="rebuttal-response-text"
                                         rows={3}
-                                        placeholder="Type your rebuttal response decision here..." 
+                                        placeholder="Type your rebuttal response decision here..."
                                         value={rebuttalResponse}
                                         onChange={(e) => setRebuttalResponse(e.target.value)}
                                         required
                                     />
                                 </div>
                                 <div className="form-button-actions">
-                                    <button 
-                                        type="button" 
-                                        className="btn-cancel" 
+                                    <button
+                                        type="button"
+                                        className="btn-cancel"
                                         onClick={() => {
                                             setSelectedRebuttal(null);
                                             setRebuttalResponse('');
@@ -379,8 +461,8 @@ export default function CouncilDashboard() {
                                     >
                                         Cancel
                                     </button>
-                                    <button 
-                                        type="submit" 
+                                    <button
+                                        type="submit"
                                         className="btn-submit"
                                         disabled={submittingRebuttal}
                                     >
@@ -392,28 +474,35 @@ export default function CouncilDashboard() {
                     )}
                 </div>
 
-                {/* Right Side: Assigned Projects list & Schedules */}
+                {/* RIGHT: Assigned Projects & Schedules */}
                 <div className="dashboard-secondary-section">
+
+                    {/* Assigned Projects */}
                     <section className="glass-card-section">
                         <h3 className="section-title-label">🛡️ Assigned Projects</h3>
                         <div className="assigned-projects-list">
-                            {assignedProjects.map(proj => (
-                                <div key={proj.id} className="project-compact-card">
-                                    <div className="card-top">
-                                        <h4>{proj.title}</h4>
-                                        <span className={`status-badge-indicator ${proj.status.toLowerCase().replace(' ', '-')}`}>
-                                            {proj.status}
-                                        </span>
+                            {assignedProjects.length === 0 ? (
+                                <p className="no-records-message">No assigned projects found.</p>
+                            ) : (
+                                assignedProjects.map(proj => (
+                                    <div key={proj.id} className="project-compact-card">
+                                        <div className="card-top">
+                                            <h4>{proj.title}</h4>
+                                            <span className={`status-badge-indicator ${proj.status.toLowerCase().replace(' ', '-')}`}>
+                                                {proj.status}
+                                            </span>
+                                        </div>
+                                        <div className="card-bottom">
+                                            <p>Team: {proj.team}</p>
+                                            <p>Round: {proj.round}</p>
+                                        </div>
                                     </div>
-                                    <div className="card-bottom">
-                                        <p>Team: {proj.team}</p>
-                                        <p>Round: {proj.round}</p>
-                                    </div>
-                                </div>
-                            ))}
+                                ))
+                            )}
                         </div>
                     </section>
 
+                    {/* Upcoming Review Slots */}
                     <section className="glass-card-section">
                         <h3 className="section-title-label">📅 Upcoming Review Slots</h3>
                         {upcomingSlots.length === 0 ? (
