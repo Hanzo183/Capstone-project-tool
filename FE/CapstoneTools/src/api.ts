@@ -513,6 +513,28 @@ export const api = {
     },
 
     // ✅ FIXED: Get schedule for a round
+    updateReviewRound: async (roundId: string, roundData: {
+        name: string;
+        startDate: string;
+        endDate: string;
+        status?: string;
+    }) => {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/rounds/${roundId}`, {
+            method: 'PUT',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(roundData)
+        });
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.message || 'Failed to update review round');
+        }
+        return response.json();
+    },
+
     getSlotsByRound: async (roundId: string) => {
         const token = localStorage.getItem('token');
         try {
