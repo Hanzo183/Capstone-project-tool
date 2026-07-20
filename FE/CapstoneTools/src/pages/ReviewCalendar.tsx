@@ -45,6 +45,8 @@ const defaultSlotForm: SlotFormState = {
 const canManageSchedule = (role: string | null) =>
     role === 'Admin' || role === 'Lecturer' || role === 'CouncilMember';
 
+const councilMemberIdPattern = /^CM\d{3}$/i;
+
 const toDateInputValue = (value: string) => {
     if (!value || value === 'Not scheduled') return '';
     return value.includes('T') ? value.slice(0, 16) : value.replace(' ', 'T').slice(0, 16);
@@ -230,6 +232,11 @@ export default function ReviewCalendar() {
             return;
         }
 
+        if (councilMemberIds.some(memberId => !councilMemberIdPattern.test(memberId))) {
+            setFormError('Council member ID must start with CM followed by 3 numbers, for example CM001.');
+            return;
+        }
+
         const durationMinutes = Number(slotForm.durationMinutes);
         if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
             setFormError('Duration must be greater than 0 minutes.');
@@ -242,7 +249,7 @@ export default function ReviewCalendar() {
             reviewDate: slotForm.reviewDate,
             room: slotForm.room.trim(),
             durationMinutes,
-            councilMemberIds
+            councilMemberIds: councilMemberIds.map(memberId => memberId.toUpperCase())
         };
 
         try {
@@ -399,7 +406,7 @@ export default function ReviewCalendar() {
                                 type="text"
                                 value={slotForm.councilMemberIds}
                                 onChange={(e) => setSlotForm({ ...slotForm, councilMemberIds: e.target.value })}
-                                placeholder="USR001, SE192879"
+                                placeholder="CM001, CM002"
                                 required
                             />
                         </label>

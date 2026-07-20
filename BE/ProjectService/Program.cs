@@ -537,7 +537,7 @@ sealed class ProjectManagementService(
             ProjectId = project.Id,
             FileName = fileName,
             FileUrl = fileUrl,
-            Version = await repository.GetNextSubmissionVersionAsync(project.Id),
+            Version = 0,
             SubmittedAt = DateTime.UtcNow,
             SubmittedBy = submittedBy
         };
@@ -779,8 +779,15 @@ sealed class EfProjectRepository(ProjectDbContext db) : IProjectRepository
 
     public async Task AddSubmissionAsync(SubmissionItem submission)
     {
+        await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+        var currentVersion = await db.Submissions
+            .Where(item => item.ProjectId == submission.ProjectId)
+            .Select(item => (int?)item.Version)
+            .MaxAsync() ?? 0;
+        submission.Version = currentVersion + 1;
         db.Submissions.Add(submission);
         await db.SaveChangesAsync();
+        await transaction.CommitAsync();
     }
 
     public async Task<PagedResult<SubmissionItem>> GetSubmissionHistoryAsync(string projectId, Paging paging)
@@ -969,6 +976,7 @@ sealed class ProjectDbContext(DbContextOptions<ProjectDbContext> options) : DbCo
         modelBuilder.Entity<ProjectItem>().ToTable("Projects").HasKey(project => project.Id);
         modelBuilder.Entity<ProjectItem>().HasIndex(project => project.TeamId).IsUnique();
         modelBuilder.Entity<SubmissionItem>().ToTable("Submissions").HasKey(submission => submission.Id);
+        modelBuilder.Entity<SubmissionItem>().HasIndex(submission => new { submission.ProjectId, submission.Version }).IsUnique();
         modelBuilder.Entity<SubmissionItem>()
             .HasOne(submission => submission.Project)
             .WithMany()

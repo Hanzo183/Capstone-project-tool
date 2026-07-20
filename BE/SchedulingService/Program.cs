@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Hangfire;
 using Hangfire.Dashboard;
 using Hangfire.SqlServer;
@@ -258,11 +259,10 @@ app.MapPost("/schedule/assign", async (AssignSlotRequest request, SchedulingDbCo
         return Results.BadRequest(new { message = "Duration must be greater than 0 minutes." });
     }
 
-    if (request.CouncilMemberIds is null ||
-        request.CouncilMemberIds.Length == 0 ||
-        request.CouncilMemberIds.Any(string.IsNullOrWhiteSpace))
+    var councilIdError = ValidateCouncilMemberIds(request.CouncilMemberIds);
+    if (councilIdError is not null)
     {
-        return Results.BadRequest(new { message = "At least one council member is required." });
+        return Results.BadRequest(new { message = councilIdError });
     }
 
     var roundExists = await db.ReviewRounds.AnyAsync(round => round.Id == request.RoundId);
@@ -283,7 +283,7 @@ app.MapPost("/schedule/assign", async (AssignSlotRequest request, SchedulingDbCo
     };
 
     var councilMemberIds = request.CouncilMemberIds
-        .Select(memberId => memberId.Trim())
+        .Select(NormalizeCouncilMemberId)
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToArray();
     db.ScheduleSlots.Add(slot);
@@ -364,11 +364,10 @@ app.MapPut("/schedule/{id}", async (string id, AssignSlotRequest request, Schedu
         return Results.BadRequest(new { message = "Duration must be greater than 0 minutes." });
     }
 
-    if (request.CouncilMemberIds is null ||
-        request.CouncilMemberIds.Length == 0 ||
-        request.CouncilMemberIds.Any(string.IsNullOrWhiteSpace))
+    var councilIdError = ValidateCouncilMemberIds(request.CouncilMemberIds);
+    if (councilIdError is not null)
     {
-        return Results.BadRequest(new { message = "At least one council member is required." });
+        return Results.BadRequest(new { message = councilIdError });
     }
 
     var roundExists = await db.ReviewRounds.AnyAsync(round => round.Id == request.RoundId);
@@ -392,7 +391,7 @@ app.MapPut("/schedule/{id}", async (string id, AssignSlotRequest request, Schedu
     var existingReviewers = await db.SlotReviewers.Where(reviewer => reviewer.SlotId == id).ToListAsync();
     db.SlotReviewers.RemoveRange(existingReviewers);
     var councilMemberIds = request.CouncilMemberIds
-        .Select(memberId => memberId.Trim())
+        .Select(NormalizeCouncilMemberId)
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToArray();
     foreach (var memberId in councilMemberIds)
@@ -475,6 +474,24 @@ static bool HasRole(ClaimsPrincipal user, params string[] roles)
     var roleClaims = user.FindAll("role").Concat(user.FindAll(ClaimTypes.Role));
     return roleClaims.Any(claim => roles.Any(role => string.Equals(claim.Value, role, StringComparison.OrdinalIgnoreCase)));
 }
+
+static string? ValidateCouncilMemberIds(string[]? councilMemberIds)
+{
+    if (councilMemberIds is null || councilMemberIds.Length == 0)
+    {
+        return "At least one council member is required.";
+    }
+
+    return councilMemberIds.Any(memberId => string.IsNullOrWhiteSpace(memberId) || !IsValidCouncilMemberId(memberId))
+        ? "Council member ID must start with CM followed by 3 numbers, for example CM001."
+        : null;
+}
+
+static string NormalizeCouncilMemberId(string councilMemberId) =>
+    councilMemberId.Trim().ToUpperInvariant();
+
+static bool IsValidCouncilMemberId(string councilMemberId) =>
+    Regex.IsMatch(NormalizeCouncilMemberId(councilMemberId), "^CM\\d{3}$");
 
 sealed class SchedulingJobs(SchedulingDbContext db, ILogger<SchedulingJobs> logger, IntegrationEventPublisher events)
 {

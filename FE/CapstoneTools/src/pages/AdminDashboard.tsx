@@ -31,6 +31,7 @@ interface ReviewRound {
 }
 
 const studentIdPattern = /^[A-Za-z]{2}\d{6}$/;
+const councilMemberIdPattern = /^CM\d{3}$/i;
 const emailPattern = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 const isStrongPassword = (password: string) =>
@@ -152,13 +153,23 @@ export default function AdminDashboard() {
             return;
         }
 
-        if (newUser.role === 'Student' && !newUser.studentId.trim()) {
-            alert('ID is required for student accounts.');
+        if ((newUser.role === 'Student' || newUser.role === 'CouncilMember') && !newUser.studentId.trim()) {
+            alert('ID is required for Student and Council Member accounts.');
             return;
         }
 
-        if (newUser.studentId.trim() && !studentIdPattern.test(newUser.studentId.trim())) {
+        if (newUser.role === 'Student' && !studentIdPattern.test(newUser.studentId.trim())) {
             alert('ID must start with 2 letters followed by 6 numbers, for example SE192706.');
+            return;
+        }
+
+        if (newUser.role === 'CouncilMember' && !councilMemberIdPattern.test(newUser.studentId.trim())) {
+            alert('Council member ID must start with CM followed by 3 numbers, for example CM001.');
+            return;
+        }
+
+        if (!['Student', 'CouncilMember'].includes(newUser.role) && newUser.studentId.trim()) {
+            alert('ID is only required for Student and Council Member accounts.');
             return;
         }
 
@@ -185,6 +196,41 @@ export default function AdminDashboard() {
             setUsers(Array.isArray(usersData) ? usersData : []);
         } catch  {
             alert('Failed to create user. Email or ID may already exist.');
+        }
+    };
+
+    const handleRoundStatusChange = async (round: ReviewRound, nextStatus: string) => {
+        if (round.status === nextStatus) {
+            return;
+        }
+
+        try {
+            await api.updateReviewRound(round.id, {
+                name: round.name,
+                startDate: round.startDate.split('T')[0],
+                endDate: round.endDate.split('T')[0],
+                status: nextStatus
+            });
+
+            const roundsData = await api.getReviewRounds();
+            setRounds(Array.isArray(roundsData) ? roundsData : []);
+        } catch (err: any) {
+            alert(err.message || 'Failed to update round status.');
+        }
+    };
+
+    const handleTriggerBackgroundJobs = async () => {
+        try {
+            await Promise.all([
+                api.updateRoundStatus(),
+                api.triggerReminders()
+            ]);
+
+            const roundsData = await api.getReviewRounds();
+            setRounds(Array.isArray(roundsData) ? roundsData : []);
+            alert('Background jobs executed. Round statuses and deadline reminders were refreshed.');
+        } catch (err: any) {
+            alert(err.message || 'Failed to trigger background jobs.');
         }
     };
 
@@ -420,7 +466,7 @@ export default function AdminDashboard() {
                                 <div className="operation-item-box">
                                     <div className="op-info">
                                         <h5>Background Job Monitor</h5>
-                                        <p>Hangfire cron loops executing reports</p>
+                                        <p>Hangfire recurring jobs update rounds and reminders</p>
                                     </div>
                                     <button
                                         className="btn-op-trigger"
@@ -432,7 +478,7 @@ export default function AdminDashboard() {
                                             borderRadius: '6px',
                                             cursor: 'pointer'
                                         }}
-                                        onClick={() => alert('✅ Background jobs triggered!')}
+                                        onClick={handleTriggerBackgroundJobs}
                                     >
                                         Trigger Execution
                                     </button>
@@ -464,6 +510,44 @@ export default function AdminDashboard() {
                                         {rounds.filter(r => r.status === 'Active').length} active
                                     </span>
                                 </div>
+                                {rounds.length > 0 && (
+                                    <div style={{ display: 'grid', gap: '0.5rem' }}>
+                                        {rounds.map(round => (
+                                            <div
+                                                key={round.id}
+                                                style={{
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'space-between',
+                                                    gap: '0.75rem',
+                                                    padding: '0.5rem',
+                                                    border: '1px solid #e5e7eb',
+                                                    borderRadius: '6px',
+                                                    background: '#f8fafc'
+                                                }}
+                                            >
+                                                <div>
+                                                    <strong style={{ display: 'block', fontSize: '0.85rem' }}>{round.name}</strong>
+                                                    <span style={{ fontSize: '0.7rem', color: '#64748b' }}>{round.id}</span>
+                                                </div>
+                                                <select
+                                                    value={round.status || 'Upcoming'}
+                                                    onChange={(event) => handleRoundStatusChange(round, event.target.value)}
+                                                    style={{
+                                                        padding: '0.25rem 0.5rem',
+                                                        borderRadius: '4px',
+                                                        border: '1px solid #cbd5e1',
+                                                        fontSize: '0.75rem'
+                                                    }}
+                                                >
+                                                    <option value="Upcoming">Upcoming</option>
+                                                    <option value="Active">Active</option>
+                                                    <option value="Closed">Closed</option>
+                                                </select>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -665,10 +749,12 @@ export default function AdminDashboard() {
                                 </label>
                                 <input
                                     type="text"
-                                    placeholder="SE123456"
-                                    pattern="[A-Za-z]{2}[0-9]{6}"
-                                    title="ID must start with 2 letters followed by 6 numbers, for example SE192706."
-                                    required={newUser.role === 'Student'}
+                                    placeholder={newUser.role === 'CouncilMember' ? 'CM001' : 'SE123456'}
+                                    pattern={newUser.role === 'CouncilMember' ? 'CM[0-9]{3}' : '[A-Za-z]{2}[0-9]{6}'}
+                                    title={newUser.role === 'CouncilMember'
+                                        ? 'Council member ID must start with CM followed by 3 numbers, for example CM001.'
+                                        : 'ID must start with 2 letters followed by 6 numbers, for example SE192706.'}
+                                    required={newUser.role === 'Student' || newUser.role === 'CouncilMember'}
                                     value={newUser.studentId}
                                     onChange={(e) => setNewUser({ ...newUser, studentId: e.target.value })}
                                     style={{

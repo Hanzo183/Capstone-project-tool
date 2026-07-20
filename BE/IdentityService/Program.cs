@@ -417,14 +417,25 @@ static string? ValidateRegisterRequest(RegisterRequest request)
 
     var normalizedRole = NormalizeRole(request.Role);
     var normalizedStudentId = NormalizeStudentId(request.StudentId);
-    if (normalizedRole == "Student" && string.IsNullOrWhiteSpace(normalizedStudentId))
+    if ((normalizedRole == "Student" || normalizedRole == "CouncilMember") && string.IsNullOrWhiteSpace(normalizedStudentId))
     {
-        return "Student ID is required for student accounts.";
+        return "ID is required for Student and CouncilMember accounts.";
     }
 
-    if (!string.IsNullOrWhiteSpace(normalizedStudentId) && !IsValidStudentId(normalizedStudentId))
+    if (normalizedRole == "Student" && !IsValidStudentId(normalizedStudentId!))
     {
         return "Student ID must start with 2 letters followed by 6 numbers, for example SE192706.";
+    }
+
+    if (normalizedRole == "CouncilMember" && !IsValidCouncilMemberId(normalizedStudentId!))
+    {
+        return "Council member ID must start with CM followed by 3 numbers, for example CM001.";
+    }
+
+    if (!string.IsNullOrWhiteSpace(normalizedStudentId) &&
+        normalizedRole is not ("Student" or "CouncilMember"))
+    {
+        return "ID is only supported for Student and CouncilMember accounts.";
     }
 
     return ValidatePassword(request.Password);
@@ -446,6 +457,9 @@ static bool IsValidEmail(string email) =>
 
 static bool IsValidStudentId(string studentId) =>
     Regex.IsMatch(studentId, "^[A-Z]{2}\\d{6}$");
+
+static bool IsValidCouncilMemberId(string councilMemberId) =>
+    Regex.IsMatch(councilMemberId, "^CM\\d{3}$");
 
 static string? NormalizeStudentId(string? studentId) =>
     string.IsNullOrWhiteSpace(studentId) ? null : studentId.Trim().ToUpperInvariant();
@@ -544,7 +558,11 @@ sealed class UserAccount
     public static UserAccount Create(string? studentId, string fullName, string email, string password, string role) =>
         new()
         {
-            Id = studentId is not null && Regex.IsMatch(studentId, "^[A-Z]{2}\\d{6}$") ? studentId : ShortId.New("USR"),
+            Id = studentId is not null &&
+                ((role == "Student" && Regex.IsMatch(studentId, "^[A-Z]{2}\\d{6}$")) ||
+                 (role == "CouncilMember" && Regex.IsMatch(studentId, "^CM\\d{3}$")))
+                    ? studentId
+                    : ShortId.New("USR"),
             StudentId = studentId,
             FullName = fullName,
             Email = email,
