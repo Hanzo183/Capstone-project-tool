@@ -148,7 +148,7 @@ npm run dev
 | Nguyen Chinh Nhan | Frontend, UI workflows, student-facing features |
 | Tran Tuan Minh | Scheduling, background jobs, reporting, integration testing |
 
-Update this table if your team assignment is different.
+
 
 ## Notes
 
