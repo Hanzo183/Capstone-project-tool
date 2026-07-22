@@ -4,9 +4,10 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using RabbitMQ.Client;
+using Confluent.Kafka;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors(options =>
@@ -70,6 +71,17 @@ builder.Services.AddDbContext<EvaluationDbContext>(options =>
 builder.Services.AddSingleton<IntegrationEventPublisher>();
 
 var app = builder.Build();
+app.UseExceptionHandler(exceptionApp =>
+{
+    exceptionApp.Run(async context =>
+    {
+        var feature = context.Features.Get<IExceptionHandlerFeature>();
+        var logger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("GlobalExceptionHandler");
+        logger.LogError(feature?.Error, "Unhandled EvaluationService exception.");
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        await context.Response.WriteAsJsonAsync(new { message = "An unexpected evaluation service error occurred." });
+    });
+});
 app.UseCors();
 app.UseSwagger();
 app.UseSwaggerUI();
@@ -133,25 +145,115 @@ app.MapPost("/evaluations", async (CreateEvaluationRequest request, EvaluationDb
     });
 }).RequireAuthorization("EvaluationSubmitters");
 
-app.MapGet("/evaluations/project/{projectId}", async (string projectId, EvaluationDbContext db) =>
+app.MapGet("/evaluations/project/{projectId}", async (string projectId, int? page, int? pageSize, EvaluationDbContext db) =>
 {
-    var projectEvaluations = await db.Evaluations
+    var paging = Paging.Normalize(page, pageSize);
+    var query = db.Evaluations
         .AsNoTracking()
         .Where(item => item.ProjectId == projectId)
-        .OrderByDescending(item => item.SubmittedAt)
+        .OrderByDescending(item => item.SubmittedAt);
+    var totalCount = await query.CountAsync();
+    var projectEvaluations = await query
+        .Skip((paging.Page - 1) * paging.PageSize)
+        .Take(paging.PageSize)
         .ToListAsync();
 
-    return Results.Ok(projectEvaluations);
+    return Results.Ok(new PagedResult<EvaluationItem>(projectEvaluations, paging.Page, paging.PageSize, totalCount));
 }).RequireAuthorization("EvaluationViewers");
 
-app.MapGet("/evaluations", async (EvaluationDbContext db) =>
+app.MapGet("/evaluations", async (string? projectId, string? roundId, string? evaluatorId, decimal? minScore, string? sortBy, string? sortDir, int? page, int? pageSize, EvaluationDbContext db) =>
 {
-    var evaluations = await db.Evaluations
-        .AsNoTracking()
-        .OrderByDescending(item => item.SubmittedAt)
+    var paging = Paging.Normalize(page, pageSize);
+    var query = db.Evaluations.AsNoTracking();
+
+    if (!string.IsNullOrWhiteSpace(projectId))
+    {
+        query = query.Where(item => item.ProjectId == projectId);
+    }
+
+    if (!string.IsNullOrWhiteSpace(roundId))
+    {
+        query = query.Where(item => item.RoundId == roundId);
+    }
+
+    if (!string.IsNullOrWhiteSpace(evaluatorId))
+    {
+        query = query.Where(item => item.EvaluatorId == evaluatorId);
+    }
+
+    if (minScore is not null)
+    {
+        query = query.Where(item => item.Score >= minScore.Value);
+    }
+
+    var totalCount = await query.CountAsync();
+    query = EvaluationSorting.Apply(query, sortBy, sortDir);
+    var evaluations = await query
+        .Skip((paging.Page - 1) * paging.PageSize)
+        .Take(paging.PageSize)
         .ToListAsync();
 
-    return Results.Ok(evaluations);
+    return Results.Ok(new PagedResult<EvaluationItem>(evaluations, paging.Page, paging.PageSize, totalCount));
+}).RequireAuthorization("EvaluationSubmitters");
+
+app.MapGet("/evaluations/{id}", async (string id, EvaluationDbContext db) =>
+{
+    var evaluation = await db.Evaluations.AsNoTracking().FirstOrDefaultAsync(item => item.Id == id);
+    return evaluation is null ? Results.NotFound() : Results.Ok(evaluation);
+}).RequireAuthorization("EvaluationViewers");
+
+app.MapPut("/evaluations/{id}", async (string id, UpdateEvaluationRequest request, EvaluationDbContext db, IntegrationEventPublisher events) =>
+{
+    if (string.IsNullOrWhiteSpace(request.ProjectId) ||
+        string.IsNullOrWhiteSpace(request.RoundId) ||
+        string.IsNullOrWhiteSpace(request.EvaluatorId))
+    {
+        return Results.BadRequest(new { message = "Project, round, and evaluator are required." });
+    }
+
+    if (request.Score < 0 || request.Score > 10)
+    {
+        return Results.BadRequest(new { message = "Score must be between 0 and 10." });
+    }
+
+    var evaluation = await db.Evaluations.FirstOrDefaultAsync(item => item.Id == id);
+    if (evaluation is null)
+    {
+        return Results.NotFound();
+    }
+
+    evaluation.ProjectId = request.ProjectId.Trim();
+    evaluation.RoundId = request.RoundId.Trim();
+    evaluation.EvaluatorId = request.EvaluatorId.Trim();
+    evaluation.Score = request.Score;
+    evaluation.Feedback = request.Feedback?.Trim();
+    await db.SaveChangesAsync();
+    await events.PublishAsync("evaluation.updated", new
+    {
+        evaluation.Id,
+        evaluation.ProjectId,
+        evaluation.RoundId,
+        evaluation.EvaluatorId,
+        evaluation.Score,
+        evaluation.Feedback
+    });
+
+    return Results.Ok(evaluation);
+}).RequireAuthorization("EvaluationSubmitters");
+
+app.MapDelete("/evaluations/{id}", async (string id, EvaluationDbContext db) =>
+{
+    var evaluation = await db.Evaluations.FirstOrDefaultAsync(item => item.Id == id);
+    if (evaluation is null)
+    {
+        return Results.NotFound();
+    }
+
+    var rebuttals = await db.Rebuttals.Where(item => item.EvaluationId == id).ToListAsync();
+    db.Rebuttals.RemoveRange(rebuttals);
+    db.Evaluations.Remove(evaluation);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
 }).RequireAuthorization("EvaluationSubmitters");
 
 app.MapPost("/rebuttals", async (CreateRebuttalRequest request, EvaluationDbContext db, IntegrationEventPublisher events) =>
@@ -207,8 +309,9 @@ app.MapPost("/rebuttals", async (CreateRebuttalRequest request, EvaluationDbCont
     });
 }).RequireAuthorization("StudentsOrAdmin");
 
-app.MapGet("/rebuttals", async (string? status, EvaluationDbContext db) =>
+app.MapGet("/rebuttals", async (string? status, int? page, int? pageSize, EvaluationDbContext db) =>
 {
+    var paging = Paging.Normalize(page, pageSize);
     var query = db.Rebuttals.AsNoTracking();
 
     if (!string.IsNullOrWhiteSpace(status))
@@ -216,8 +319,13 @@ app.MapGet("/rebuttals", async (string? status, EvaluationDbContext db) =>
         query = query.Where(item => item.Status == status);
     }
 
-    var rebuttals = await query.OrderByDescending(item => item.SubmittedAt).ToListAsync();
-    return Results.Ok(rebuttals);
+    var totalCount = await query.CountAsync();
+    var rebuttals = await query
+        .OrderByDescending(item => item.SubmittedAt)
+        .Skip((paging.Page - 1) * paging.PageSize)
+        .Take(paging.PageSize)
+        .ToListAsync();
+    return Results.Ok(new PagedResult<RebuttalItem>(rebuttals, paging.Page, paging.PageSize, totalCount));
 }).RequireAuthorization("RebuttalReviewers");
 
 app.MapGet("/rebuttals/evaluation/{evaluationId}", async (string evaluationId, EvaluationDbContext db) =>
@@ -287,6 +395,19 @@ app.MapPut("/rebuttals/{id}/respond", async (string id, RespondToRebuttalRequest
     await db.SaveChangesAsync();
 
     return Results.Ok(rebuttal);
+}).RequireAuthorization("RebuttalReviewers");
+
+app.MapDelete("/rebuttals/{id}", async (string id, EvaluationDbContext db) =>
+{
+    var rebuttal = await db.Rebuttals.FirstOrDefaultAsync(item => item.Id == id);
+    if (rebuttal is null)
+    {
+        return Results.NotFound();
+    }
+
+    db.Rebuttals.Remove(rebuttal);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
 }).RequireAuthorization("RebuttalReviewers");
 
 app.MapGet("/reports/{roundId}", async (string roundId, EvaluationDbContext db) =>
@@ -384,38 +505,46 @@ static class ShortId
 
 sealed class IntegrationEventPublisher(IConfiguration configuration, ILogger<IntegrationEventPublisher> logger)
 {
-    private readonly string exchangeName = configuration["RabbitMQ:ExchangeName"] ?? "capstone.events";
-
-    public Task PublishAsync(string eventName, object payload)
+    public async Task PublishAsync(string eventName, object payload)
     {
         try
         {
-            var factory = new ConnectionFactory
+            var config = new ProducerConfig
             {
-                HostName = configuration["RabbitMQ:HostName"] ?? "localhost",
-                Port = int.TryParse(configuration["RabbitMQ:Port"], out var port) ? port : 5672,
-                UserName = configuration["RabbitMQ:UserName"] ?? "guest",
-                Password = configuration["RabbitMQ:Password"] ?? "guest",
-                DispatchConsumersAsync = true
+                BootstrapServers = configuration["Kafka:BootstrapServers"] ?? "localhost:9092",
+                Acks = Acks.All
             };
-            using var connection = factory.CreateConnection();
-            using var channel = connection.CreateModel();
-            channel.ExchangeDeclare(exchangeName, ExchangeType.Topic, durable: true, autoDelete: false);
-
-            var envelope = JsonSerializer.SerializeToUtf8Bytes(new IntegrationEvent(eventName, DateTime.UtcNow, payload));
-            var properties = channel.CreateBasicProperties();
-            properties.Persistent = true;
-            properties.ContentType = "application/json";
-            properties.Type = eventName;
-
-            channel.BasicPublish(exchangeName, eventName, properties, envelope);
+            using var producer = new ProducerBuilder<string, string>(config).Build();
+            var envelope = JsonSerializer.Serialize(new IntegrationEvent(eventName, DateTime.UtcNow, payload));
+            await producer.ProduceAsync(eventName, new Message<string, string>
+            {
+                Key = eventName,
+                Value = envelope
+            });
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Could not publish integration event {EventName}.", eventName);
+            logger.LogWarning(ex, "Could not publish Kafka integration event {EventName}.", eventName);
         }
+    }
+}
 
-        return Task.CompletedTask;
+static class EvaluationSorting
+{
+    public static IQueryable<EvaluationItem> Apply(IQueryable<EvaluationItem> query, string? sortBy, string? sortDir)
+    {
+        var descending = !string.Equals(sortDir, "asc", StringComparison.OrdinalIgnoreCase);
+        return ((sortBy ?? "submitted").Trim().ToLowerInvariant(), descending) switch
+        {
+            ("score", false) => query.OrderBy(item => item.Score),
+            ("score", true) => query.OrderByDescending(item => item.Score),
+            ("project", false) => query.OrderBy(item => item.ProjectId),
+            ("project", true) => query.OrderByDescending(item => item.ProjectId),
+            ("round", false) => query.OrderBy(item => item.RoundId),
+            ("round", true) => query.OrderByDescending(item => item.RoundId),
+            ("submitted", false) => query.OrderBy(item => item.SubmittedAt),
+            _ => query.OrderByDescending(item => item.SubmittedAt)
+        };
     }
 }
 
@@ -495,6 +624,17 @@ record IntegrationEvent(string Name, DateTime OccurredAt, object Payload);
 
 record RoundReport(string RoundId, int EvaluationCount, decimal AverageScore, IEnumerable<EvaluationItem> Evaluations);
 record CreateEvaluationRequest(string ProjectId, string RoundId, string EvaluatorId, decimal Score, string? Feedback, string? StudentId);
+record UpdateEvaluationRequest(string ProjectId, string RoundId, string EvaluatorId, decimal Score, string? Feedback);
 record CreateRebuttalRequest(string EvaluationId, string StudentId, string Content);
 record UpdateRebuttalStatusRequest(string Status, string? Response);
 record RespondToRebuttalRequest(string Response);
+record Paging(int Page, int PageSize)
+{
+    public static Paging Normalize(int? page, int? pageSize) =>
+        new(Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 20, 1, 100));
+}
+
+record PagedResult<T>(IReadOnlyList<T> Items, int Page, int PageSize, int TotalCount)
+{
+    public int TotalPages => TotalCount == 0 ? 0 : (int)Math.Ceiling(TotalCount / (double)PageSize);
+}

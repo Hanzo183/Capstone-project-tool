@@ -8,4 +8,5 @@
   <Project Path="SchedulingService/SchedulingService.csproj" />
   <Project Path="EvaluationService/EvaluationService.csproj" />
   <Project Path="NotificationService/NotificationService.csproj" />
+  <Project Path="UserProfileService/UserProfileService.csproj" />
 </Solution>

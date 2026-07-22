@@ -12,7 +12,7 @@ Password: YourStrong@Passw0rd!
 
 The schema below uses short string IDs such as `PRJ-1001`, `RND-2025A`, and `NOT-1001` instead of `UNIQUEIDENTIFIER` values.
 
-Hangfire creates its own tables automatically in `SchedulingDb` under the `Hangfire` schema when `SchedulingService` starts.
+Hangfire creates its own tables automatically in `SchedulingDb` under the `Hangfire` schema when `SchedulingService` starts. Kafka does not require database tables; the application publishes domain events to Kafka topics named after each event.
 
 Warning: this is a clean reset script. It drops and recreates the five service databases.
 

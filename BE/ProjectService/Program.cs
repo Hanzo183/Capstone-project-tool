@@ -1,13 +1,16 @@
-using System.Security.Cryptography;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Confluent.Kafka;
+using Grpc.Core;
+using Grpc.Net.Client;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.Data.SqlClient;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using RabbitMQ.Client;
+using UserProfile;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors(options =>
@@ -60,16 +63,34 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("Authenticated", policy => policy.RequireAuthenticatedUser());
-    options.AddPolicy("ProjectManagers", policy => policy.RequireAssertion(context => HasRole(context.User, "Admin", "Lecturer")));
-    options.AddPolicy("Submitters", policy => policy.RequireAssertion(context => HasRole(context.User, "Admin", "Student")));
+    options.AddPolicy("ProjectManagers", policy => policy.RequireAssertion(context => AuthHelpers.HasRole(context.User, "Admin", "Lecturer")));
+    options.AddPolicy("Submitters", policy => policy.RequireAssertion(context => AuthHelpers.HasRole(context.User, "Admin", "Student")));
 });
 builder.Services.AddDbContext<ProjectDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
-builder.Services.AddDbContext<IdentityLookupDbContext>(options =>
-    options.UseSqlServer(BuildIdentityConnectionString(builder.Configuration)));
+builder.Services.AddScoped<IProjectRepository, EfProjectRepository>();
+builder.Services.AddScoped<ProjectManagementService>();
 builder.Services.AddSingleton<IntegrationEventPublisher>();
+builder.Services.AddSingleton(sp =>
+{
+    AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
+    var address = sp.GetRequiredService<IConfiguration>()["Grpc:UserProfileAddress"] ?? "http://localhost:8086";
+    return new UserProfileLookup.UserProfileLookupClient(GrpcChannel.ForAddress(address));
+});
+builder.Services.AddScoped<UserProfileGateway>();
 
 var app = builder.Build();
+app.UseExceptionHandler(exceptionApp =>
+{
+    exceptionApp.Run(async context =>
+    {
+        var feature = context.Features.Get<IExceptionHandlerFeature>();
+        var logger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("GlobalExceptionHandler");
+        logger.LogError(feature?.Error, "Unhandled ProjectService exception.");
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        await context.Response.WriteAsJsonAsync(new { message = "An unexpected project service error occurred." });
+    });
+});
 app.UseCors();
 app.UseSwagger();
 app.UseSwaggerUI();
@@ -82,245 +103,46 @@ app.MapGet("/health", async (ProjectDbContext db) =>
     return Results.Ok(new { service = "project", status = canConnect ? "healthy" : "database-unavailable" });
 });
 
-app.MapGet("/projects", async (string? status, string? round, string? reviewer, ProjectDbContext db, HttpContext httpContext) =>
+app.MapGet("/projects", async (
+    string? search,
+    string? status,
+    string? round,
+    string? reviewer,
+    string? sortBy,
+    string? sortDir,
+    int? page,
+    int? pageSize,
+    ProjectManagementService projects,
+    HttpContext httpContext) =>
 {
-    var query = db.Projects.AsNoTracking();
-    var user = httpContext.User;
-    var currentUserId = GetCurrentUserId(user);
-
-    if (HasRole(user, "Student"))
-    {
-        if (string.IsNullOrWhiteSpace(currentUserId))
-        {
-            return Results.Ok(Array.Empty<ProjectItem>());
-        }
-
-        var memberProjectIds = await db.ProjectMembers
-            .AsNoTracking()
-            .Where(member => member.StudentId == currentUserId)
-            .Select(member => member.ProjectId)
-            .ToListAsync();
-        query = query.Where(project => project.TeamLeaderId == currentUserId || memberProjectIds.Contains(project.Id));
-    }
-
-    if (!string.IsNullOrWhiteSpace(status))
-    {
-        query = query.Where(project => project.Status == status);
-    }
-
-    if (!string.IsNullOrWhiteSpace(round))
-    {
-        query = query.Where(project => project.RoundId != null && project.RoundId.Contains(round));
-    }
-
-    if (!string.IsNullOrWhiteSpace(reviewer))
-    {
-        query = query.Where(project => project.LecturerId == reviewer);
-    }
-
-    var projects = await query.OrderByDescending(project => project.UpdatedAt).ToListAsync();
-    return Results.Ok(projects);
+    var query = new ProjectSearchRequest(search, status, round, reviewer, sortBy, sortDir, page, pageSize);
+    return Results.Ok(await projects.SearchAsync(query, httpContext.User));
 }).RequireAuthorization("Authenticated");
 
-app.MapPost("/projects", async (CreateProjectRequest request, ProjectDbContext db, IdentityLookupDbContext identityDb) =>
-{
-    var validationError = ValidateCreateProjectRequest(request);
-    if (validationError is not null)
-    {
-        return Results.BadRequest(new { message = validationError });
-    }
+app.MapPost("/projects", async (CreateProjectRequest request, ProjectManagementService projects) =>
+    ToHttpResult(await projects.CreateAsync(request), createdLocation: value => $"/projects/{value.Id}"))
+    .RequireAuthorization("ProjectManagers");
 
-    var normalizedTeamId = request.TeamId.Trim();
-    var normalizedLeaderId = NormalizeStudentId(request.TeamLeaderId);
-    var memberIds = NormalizeMemberIds(request.MemberStudentIds, normalizedLeaderId);
+app.MapGet("/projects/{id}", async (string id, ProjectManagementService projects, HttpContext httpContext) =>
+    ToHttpResult(await projects.GetAsync(id, httpContext.User)))
+    .RequireAuthorization("Authenticated");
 
-    var missingStudentError = await ValidateStudentsExistAsync(memberIds, identityDb);
-    if (missingStudentError is not null)
-    {
-        return Results.BadRequest(new { message = missingStudentError });
-    }
+app.MapPut("/projects/{id}", async (string id, UpdateProjectRequest request, ProjectManagementService projects, HttpContext httpContext) =>
+    ToHttpResult(await projects.UpdateAsync(id, request, httpContext.User)))
+    .RequireAuthorization("ProjectManagers");
 
-    var teamExists = await db.Projects.AnyAsync(project => project.TeamId == normalizedTeamId);
-    if (teamExists)
-    {
-        return Results.Conflict(new { message = "Team ID is already assigned to another project." });
-    }
+app.MapDelete("/projects/{id}", async (string id, ProjectManagementService projects, HttpContext httpContext) =>
+    ToHttpResult(await projects.DeleteAsync(id, httpContext.User)))
+    .RequireAuthorization("ProjectManagers");
 
-    var project = new ProjectItem
-    {
-        Id = ShortId.New("PRJ"),
-        Title = request.Title.Trim(),
-        Description = request.Description?.Trim(),
-        TeamId = normalizedTeamId,
-        TeamLeaderId = normalizedLeaderId,
-        LecturerId = request.LecturerId.Trim(),
-        Status = "Draft",
-        RoundId = string.IsNullOrWhiteSpace(request.RoundId) ? null : request.RoundId.Trim(),
-        CreatedAt = DateTime.UtcNow,
-        UpdatedAt = DateTime.UtcNow
-    };
+app.MapPost("/projects/{id}/submit", async (string id, SubmitProjectRequest request, ProjectManagementService projects) =>
+    ToHttpResult(await projects.SubmitAsync(id, request), createdLocation: _ => $"/projects/{id}/history"))
+    .RequireAuthorization("Submitters");
 
-    db.Projects.Add(project);
-    foreach (var memberId in memberIds)
-    {
-        db.ProjectMembers.Add(new ProjectMember
-        {
-            ProjectId = project.Id,
-            StudentId = memberId,
-            IsLeader = memberId == normalizedLeaderId,
-            AddedAt = DateTime.UtcNow
-        });
-    }
-
-    await db.SaveChangesAsync();
-
-    return Results.Created($"/projects/{project.Id}", project);
-}).RequireAuthorization("ProjectManagers");
-
-app.MapGet("/projects/{id}", async (string id, ProjectDbContext db, HttpContext httpContext) =>
-{
-    var project = await db.Projects.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id);
-    if (project is null)
-    {
-        return Results.NotFound();
-    }
-
-    var members = await db.ProjectMembers
-        .AsNoTracking()
-        .Where(member => member.ProjectId == id)
-        .ToListAsync();
-
-    if (!CanAccessProjectWithMembers(httpContext.User, project, members))
-    {
-        return Results.NotFound();
-    }
-
-    return Results.Ok(project);
-}).RequireAuthorization("Authenticated");
-
-app.MapPost("/projects/{id}/submit", async (string id, SubmitProjectRequest request, ProjectDbContext db, IntegrationEventPublisher events) =>
-{
-    if (string.IsNullOrWhiteSpace(request.FileName) || string.IsNullOrWhiteSpace(request.FileUrl))
-    {
-        return Results.BadRequest(new { message = "File name and file URL are required." });
-    }
-
-    var project = await db.Projects.FirstOrDefaultAsync(candidate => candidate.Id == id);
-    if (project is null)
-    {
-        return Results.NotFound();
-    }
-
-    var nextVersion = await db.Submissions
-        .Where(item => item.ProjectId == id)
-        .Select(item => (int?)item.Version)
-        .MaxAsync() ?? 0;
-
-    var submission = new SubmissionItem
-    {
-        Id = ShortId.New("SUB"),
-        ProjectId = id,
-        FileName = request.FileName,
-        FileUrl = request.FileUrl,
-        Version = nextVersion + 1,
-        SubmittedAt = DateTime.UtcNow,
-        SubmittedBy = request.SubmittedBy
-    };
-
-    project.Status = "Submitted";
-    project.UpdatedAt = DateTime.UtcNow;
-    db.Submissions.Add(submission);
-    await db.SaveChangesAsync();
-    await events.PublishAsync("project.submitted", new
-    {
-        ProjectId = project.Id,
-        project.Title,
-        project.TeamId,
-        project.LecturerId,
-        submission.SubmittedBy,
-        submission.FileName,
-        submission.FileUrl,
-        submission.Version,
-        submission.SubmittedAt
-    });
-
-    return Results.Accepted($"/projects/{id}/history", new
-    {
-        submission,
-        @event = "project.submitted"
-    });
-}).RequireAuthorization("Submitters");
-
-app.MapPost("/projects/{id}/submissions/upload", async (string id, IFormFile file, ProjectDbContext db, IntegrationEventPublisher events, HttpContext httpContext) =>
-{
-    var project = await db.Projects.FirstOrDefaultAsync(candidate => candidate.Id == id);
-    if (project is null)
-    {
-        return Results.NotFound();
-    }
-
-    if (file.Length == 0)
-    {
-        return Results.BadRequest(new { message = "Uploaded file is empty." });
-    }
-
-    var allowedExtensions = new[] { ".pdf", ".doc", ".docx", ".zip" };
-    var originalExtension = Path.GetExtension(file.FileName);
-    if (!allowedExtensions.Contains(originalExtension, StringComparer.OrdinalIgnoreCase))
-    {
-        return Results.BadRequest(new { message = "Only PDF, Word, or ZIP submissions are allowed." });
-    }
-
-    var uploadsRoot = Path.Combine(AppContext.BaseDirectory, "uploads");
-    Directory.CreateDirectory(uploadsRoot);
-
-    var safeOriginalName = Path.GetFileName(file.FileName);
-    var storedName = $"{ShortId.New("FILE")}-{safeOriginalName}";
-    var storedPath = Path.Combine(uploadsRoot, storedName);
-
-    await using (var stream = File.Create(storedPath))
-    {
-        await file.CopyToAsync(stream);
-    }
-
-    var nextVersion = await db.Submissions
-        .Where(item => item.ProjectId == id)
-        .Select(item => (int?)item.Version)
-        .MaxAsync() ?? 0;
-    var submittedBy = httpContext.User.FindFirst("sub")?.Value
-        ?? httpContext.User.Identity?.Name
-        ?? "unknown";
-
-    var submission = new SubmissionItem
-    {
-        Id = ShortId.New("SUB"),
-        ProjectId = id,
-        FileName = safeOriginalName,
-        FileUrl = $"/projects/{id}/submissions/files/{storedName}",
-        Version = nextVersion + 1,
-        SubmittedAt = DateTime.UtcNow,
-        SubmittedBy = submittedBy
-    };
-
-    project.Status = "Submitted";
-    project.UpdatedAt = DateTime.UtcNow;
-    db.Submissions.Add(submission);
-    await db.SaveChangesAsync();
-    await events.PublishAsync("project.submitted", new
-    {
-        ProjectId = project.Id,
-        project.Title,
-        project.TeamId,
-        project.LecturerId,
-        submission.SubmittedBy,
-        submission.FileName,
-        submission.FileUrl,
-        submission.Version,
-        submission.SubmittedAt
-    });
-
-    return Results.Created($"/projects/{id}/history", submission);
-}).RequireAuthorization("Submitters").DisableAntiforgery();
+app.MapPost("/projects/{id}/submissions/upload", async (string id, IFormFile file, ProjectManagementService projects, HttpContext httpContext) =>
+    ToHttpResult(await projects.UploadSubmissionAsync(id, file, httpContext.User), createdLocation: _ => $"/projects/{id}/history"))
+    .RequireAuthorization("Submitters")
+    .DisableAntiforgery();
 
 app.MapGet("/projects/{id}/submissions/files/{storedName}", (string storedName) =>
 {
@@ -331,287 +153,816 @@ app.MapGet("/projects/{id}/submissions/files/{storedName}", (string storedName) 
         : Results.NotFound();
 }).RequireAuthorization("Authenticated");
 
-app.MapGet("/projects/{id}/history", async (string id, ProjectDbContext db) =>
-{
-    var projectSubmissions = await db.Submissions
-        .AsNoTracking()
-        .Where(item => item.ProjectId == id)
-        .OrderByDescending(item => item.Version)
-        .ToListAsync();
+app.MapGet("/projects/{id}/history", async (string id, ProjectManagementService projects, int? page, int? pageSize) =>
+    Results.Ok(await projects.GetSubmissionHistoryAsync(id, page, pageSize)))
+    .RequireAuthorization("Authenticated");
 
-    return Results.Ok(projectSubmissions);
-}).RequireAuthorization("Authenticated");
+app.MapGet("/projects/{id}/members", async (string id, ProjectManagementService projects, HttpContext httpContext) =>
+    ToHttpResult(await projects.GetMembersAsync(id, httpContext.User)))
+    .RequireAuthorization("Authenticated");
 
-app.MapGet("/projects/{id}/members", async (string id, ProjectDbContext db, HttpContext httpContext) =>
-{
-    var project = await db.Projects.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == id);
-    if (project is null)
-    {
-        return Results.NotFound();
-    }
+app.MapPost("/projects/{id}/members", async (string id, AssignProjectMemberRequest request, ProjectManagementService projects, HttpContext httpContext) =>
+    ToHttpResult(await projects.AddMemberAsync(id, request, httpContext.User), createdLocation: _ => $"/projects/{id}/members"))
+    .RequireAuthorization("ProjectManagers");
 
-    var members = await db.ProjectMembers
-        .AsNoTracking()
-        .Where(member => member.ProjectId == id)
-        .OrderByDescending(member => member.IsLeader)
-        .ThenBy(member => member.StudentId)
-        .ToListAsync();
+app.MapPut("/projects/{id}/leader", async (string id, ChangeProjectLeaderRequest request, ProjectManagementService projects, HttpContext httpContext) =>
+    ToHttpResult(await projects.ChangeLeaderAsync(id, request, httpContext.User)))
+    .RequireAuthorization("ProjectManagers");
 
-    if (!CanAccessProjectWithMembers(httpContext.User, project, members))
-    {
-        return Results.NotFound();
-    }
+app.MapDelete("/projects/{id}/members/{studentId}", async (string id, string studentId, ProjectManagementService projects, HttpContext httpContext) =>
+    ToHttpResult(await projects.RemoveMemberAsync(id, studentId, httpContext.User)))
+    .RequireAuthorization("ProjectManagers");
 
-    return Results.Ok(members);
-}).RequireAuthorization("Authenticated");
-
-app.MapPost("/projects/{id}/members", async (string id, AssignProjectMemberRequest request, ProjectDbContext db, IdentityLookupDbContext identityDb, HttpContext httpContext) =>
-{
-    var studentId = NormalizeStudentId(request.StudentId);
-    if (string.IsNullOrWhiteSpace(studentId) || !IsValidStudentId(studentId))
-    {
-        return Results.BadRequest(new { message = "Student ID must start with 2 letters followed by 6 numbers, for example SE192706." });
-    }
-
-    var project = await db.Projects.FirstOrDefaultAsync(candidate => candidate.Id == id);
-    if (project is null)
-    {
-        return Results.NotFound();
-    }
-
-    if (!CanManageProject(httpContext.User, project))
-    {
-        return Results.Forbid();
-    }
-
-    var studentExists = await StudentExistsAsync(identityDb, studentId);
-    if (!studentExists)
-    {
-        return Results.BadRequest(new { message = $"Student ID {studentId} was not found as an active student." });
-    }
-
-    var alreadyAssigned = await db.ProjectMembers.AnyAsync(member => member.ProjectId == id && member.StudentId == studentId);
-    if (alreadyAssigned)
-    {
-        return Results.Conflict(new { message = "This student is already assigned to the project." });
-    }
-
-    var member = new ProjectMember
-    {
-        ProjectId = id,
-        StudentId = studentId,
-        IsLeader = false,
-        AddedAt = DateTime.UtcNow
-    };
-
-    db.ProjectMembers.Add(member);
-    project.UpdatedAt = DateTime.UtcNow;
-    await db.SaveChangesAsync();
-
-    return Results.Created($"/projects/{id}/members", member);
-}).RequireAuthorization("ProjectManagers");
-
-app.MapDelete("/projects/{id}/members/{studentId}", async (string id, string studentId, ProjectDbContext db, HttpContext httpContext) =>
-{
-    var normalizedStudentId = NormalizeStudentId(studentId);
-    var project = await db.Projects.FirstOrDefaultAsync(candidate => candidate.Id == id);
-    if (project is null)
-    {
-        return Results.NotFound();
-    }
-
-    if (!CanManageProject(httpContext.User, project))
-    {
-        return Results.Forbid();
-    }
-
-    var member = await db.ProjectMembers.FirstOrDefaultAsync(candidate =>
-        candidate.ProjectId == id && candidate.StudentId == normalizedStudentId);
-    if (member is null)
-    {
-        return Results.NotFound();
-    }
-
-    db.ProjectMembers.Remove(member);
-    if (project.TeamLeaderId == normalizedStudentId)
-    {
-        project.TeamLeaderId = null;
-    }
-
-    project.UpdatedAt = DateTime.UtcNow;
-    await db.SaveChangesAsync();
-
-    return Results.NoContent();
-}).RequireAuthorization("ProjectManagers");
-
-app.MapPatch("/projects/{id}/status", async (string id, UpdateProjectStatusRequest request, ProjectDbContext db) =>
-{
-    if (!IsAllowedProjectStatus(request.Status))
-    {
-        return Results.BadRequest(new { message = "Status must be Draft, Submitted, In Review, Needs Revision, or Approved." });
-    }
-
-    var project = await db.Projects.FirstOrDefaultAsync(candidate => candidate.Id == id);
-    if (project is null)
-    {
-        return Results.NotFound();
-    }
-
-    project.Status = NormalizeProjectStatus(request.Status);
-    project.UpdatedAt = DateTime.UtcNow;
-    await db.SaveChangesAsync();
-
-    return Results.Ok(project);
-}).RequireAuthorization("ProjectManagers");
+app.MapPatch("/projects/{id}/status", async (string id, UpdateProjectStatusRequest request, ProjectManagementService projects, HttpContext httpContext) =>
+    ToHttpResult(await projects.UpdateStatusAsync(id, request, httpContext.User)))
+    .RequireAuthorization("ProjectManagers");
 
 app.Run();
 
-static bool HasRole(ClaimsPrincipal user, params string[] roles)
+static IResult ToHttpResult<T>(ServiceResult<T> result, Func<T, string>? createdLocation = null)
 {
-    var roleClaims = user.FindAll("role").Concat(user.FindAll(ClaimTypes.Role));
-    return roleClaims.Any(claim => roles.Any(role => string.Equals(claim.Value, role, StringComparison.OrdinalIgnoreCase)));
+    return result.StatusCode switch
+    {
+        StatusCodes.Status200OK => Results.Ok(result.Value),
+        StatusCodes.Status201Created => Results.Created(createdLocation?.Invoke(result.Value!) ?? "", result.Value),
+        StatusCodes.Status202Accepted => Results.Accepted(createdLocation?.Invoke(result.Value!) ?? "", result.Value),
+        StatusCodes.Status204NoContent => Results.NoContent(),
+        StatusCodes.Status400BadRequest => Results.BadRequest(new { message = result.Message }),
+        StatusCodes.Status403Forbidden => Results.Forbid(),
+        StatusCodes.Status404NotFound => Results.NotFound(new { message = result.Message }),
+        StatusCodes.Status409Conflict => Results.Conflict(new { message = result.Message }),
+        _ => Results.Json(new { message = result.Message }, statusCode: result.StatusCode)
+    };
 }
 
-static string? GetCurrentUserId(ClaimsPrincipal user) =>
-    user.FindFirst("sub")?.Value
-    ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value
-    ?? user.FindFirst("nameid")?.Value;
-
-static bool CanAccessProjectWithMembers(ClaimsPrincipal user, ProjectItem project, IEnumerable<ProjectMember> members)
+sealed class ProjectManagementService(
+    IProjectRepository repository,
+    UserProfileGateway userProfiles,
+    IntegrationEventPublisher events)
 {
-    if (!HasRole(user, "Student"))
+    public Task<PagedResult<ProjectItem>> SearchAsync(ProjectSearchRequest request, ClaimsPrincipal user)
     {
-        return true;
+        var criteria = ProjectSearchCriteria.From(request, AuthHelpers.GetCurrentUserId(user), AuthHelpers.HasRole(user, "Student"));
+        return repository.SearchAsync(criteria);
     }
 
-    var currentUserId = GetCurrentUserId(user);
-    return !string.IsNullOrWhiteSpace(currentUserId) &&
-        (string.Equals(project.TeamLeaderId, currentUserId, StringComparison.OrdinalIgnoreCase) ||
-         members.Any(member => string.Equals(member.StudentId, currentUserId, StringComparison.OrdinalIgnoreCase)));
-}
-
-static bool CanManageProject(ClaimsPrincipal user, ProjectItem project)
-{
-    if (HasRole(user, "Admin"))
+    public async Task<ServiceResult<ProjectItem>> CreateAsync(CreateProjectRequest request)
     {
-        return true;
-    }
-
-    var currentUserId = GetCurrentUserId(user);
-    return HasRole(user, "Lecturer") &&
-        !string.IsNullOrWhiteSpace(currentUserId) &&
-        string.Equals(project.LecturerId, currentUserId, StringComparison.OrdinalIgnoreCase);
-}
-
-static string? ValidateCreateProjectRequest(CreateProjectRequest request)
-{
-    if (string.IsNullOrWhiteSpace(request.Title) || request.Title.Trim().Length < 3)
-    {
-        return "Project title must be at least 3 characters.";
-    }
-
-    if (string.IsNullOrWhiteSpace(request.TeamId))
-    {
-        return "Team ID is required.";
-    }
-
-    if (string.IsNullOrWhiteSpace(request.LecturerId))
-    {
-        return "Lecturer ID is required.";
-    }
-
-    var leaderId = NormalizeStudentId(request.TeamLeaderId);
-    if (!string.IsNullOrWhiteSpace(leaderId) && !IsValidStudentId(leaderId))
-    {
-        return "Team leader ID must start with 2 letters followed by 6 numbers, for example SE192706.";
-    }
-
-    foreach (var memberId in request.MemberStudentIds ?? [])
-    {
-        var normalizedMemberId = NormalizeStudentId(memberId);
-        if (string.IsNullOrWhiteSpace(normalizedMemberId) || !IsValidStudentId(normalizedMemberId))
+        var validationError = ProjectValidation.ValidateCreate(request);
+        if (validationError is not null)
         {
-            return "Each member Student ID must start with 2 letters followed by 6 numbers, for example SE192706.";
+            return ServiceResult<ProjectItem>.BadRequest(validationError);
         }
+
+        var normalizedTeamId = request.TeamId.Trim();
+        var normalizedLeaderId = ProjectValidation.NormalizeStudentId(request.TeamLeaderId);
+        var memberIds = ProjectValidation.NormalizeMemberIds(request.MemberStudentIds, normalizedLeaderId);
+
+        var missingStudentError = await userProfiles.ValidateStudentsExistAsync(memberIds);
+        if (missingStudentError is not null)
+        {
+            return ServiceResult<ProjectItem>.BadRequest(missingStudentError);
+        }
+
+        if (await repository.TeamExistsAsync(normalizedTeamId))
+        {
+            return ServiceResult<ProjectItem>.Conflict("Team ID is already assigned to another project.");
+        }
+
+        var project = new ProjectItem
+        {
+            Id = ShortId.New("PRJ"),
+            Title = request.Title.Trim(),
+            Description = request.Description?.Trim(),
+            TeamId = normalizedTeamId,
+            TeamLeaderId = normalizedLeaderId,
+            LecturerId = request.LecturerId.Trim(),
+            Status = "Draft",
+            RoundId = string.IsNullOrWhiteSpace(request.RoundId) ? null : request.RoundId.Trim(),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+
+        await repository.AddAsync(project, memberIds.Select(memberId => new ProjectMember
+        {
+            ProjectId = project.Id,
+            StudentId = memberId,
+            IsLeader = memberId == normalizedLeaderId,
+            AddedAt = DateTime.UtcNow
+        }));
+
+        return ServiceResult<ProjectItem>.Created(project);
     }
 
-    return null;
-}
-
-static List<string> NormalizeMemberIds(string[]? memberStudentIds, string? leaderId)
-{
-    var members = (memberStudentIds ?? [])
-        .Select(NormalizeStudentId)
-        .Where(memberId => !string.IsNullOrWhiteSpace(memberId))
-        .Select(memberId => memberId!)
-        .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-    if (!string.IsNullOrWhiteSpace(leaderId))
+    public async Task<ServiceResult<ProjectItem>> GetAsync(string id, ClaimsPrincipal user)
     {
-        members.Add(leaderId);
+        var project = await repository.GetAsync(id, tracking: false);
+        if (project is null)
+        {
+            return ServiceResult<ProjectItem>.NotFound("Project was not found.");
+        }
+
+        var members = await repository.GetMembersAsync(id);
+        return CanAccess(user, project, members)
+            ? ServiceResult<ProjectItem>.Ok(project)
+            : ServiceResult<ProjectItem>.NotFound("Project was not found.");
     }
 
-    return members.OrderBy(memberId => memberId).ToList();
-}
-
-static string? NormalizeStudentId(string? studentId) =>
-    string.IsNullOrWhiteSpace(studentId) ? null : studentId.Trim().ToUpperInvariant();
-
-static bool IsValidStudentId(string studentId) =>
-    Regex.IsMatch(studentId, "^[A-Z]{2}\\d{6}$");
-
-static bool IsAllowedProjectStatus(string status) => !string.IsNullOrWhiteSpace(NormalizeProjectStatus(status));
-
-static string BuildIdentityConnectionString(IConfiguration configuration)
-{
-    var explicitConnection = configuration.GetConnectionString("IdentityConnection");
-    if (!string.IsNullOrWhiteSpace(explicitConnection))
+    public async Task<ServiceResult<ProjectItem>> UpdateAsync(string id, UpdateProjectRequest request, ClaimsPrincipal user)
     {
-        return explicitConnection;
+        var validationError = ProjectValidation.ValidateUpdate(request);
+        if (validationError is not null)
+        {
+            return ServiceResult<ProjectItem>.BadRequest(validationError);
+        }
+
+        var project = await repository.GetAsync(id, tracking: true);
+        if (project is null)
+        {
+            return ServiceResult<ProjectItem>.NotFound("Project was not found.");
+        }
+
+        if (!CanManage(user, project))
+        {
+            return ServiceResult<ProjectItem>.Forbidden();
+        }
+
+        var normalizedTeamId = request.TeamId.Trim();
+        if (!string.Equals(project.TeamId, normalizedTeamId, StringComparison.OrdinalIgnoreCase) &&
+            await repository.TeamExistsAsync(normalizedTeamId, id))
+        {
+            return ServiceResult<ProjectItem>.Conflict("Team ID is already assigned to another project.");
+        }
+
+        var normalizedLeaderId = ProjectValidation.NormalizeStudentId(request.TeamLeaderId);
+        var memberIds = ProjectValidation.NormalizeMemberIds(request.MemberStudentIds, normalizedLeaderId);
+        var missingStudentError = await userProfiles.ValidateStudentsExistAsync(memberIds);
+        if (missingStudentError is not null)
+        {
+            return ServiceResult<ProjectItem>.BadRequest(missingStudentError);
+        }
+
+        project.Title = request.Title.Trim();
+        project.Description = request.Description?.Trim();
+        project.TeamId = normalizedTeamId;
+        project.TeamLeaderId = normalizedLeaderId;
+        project.LecturerId = request.LecturerId.Trim();
+        project.RoundId = string.IsNullOrWhiteSpace(request.RoundId) ? null : request.RoundId.Trim();
+        project.UpdatedAt = DateTime.UtcNow;
+        await repository.ReplaceMembersAsync(project.Id, memberIds, normalizedLeaderId);
+        await repository.SaveChangesAsync();
+
+        return ServiceResult<ProjectItem>.Ok(project);
     }
 
-    var defaultConnection = configuration.GetConnectionString("DefaultConnection")
-        ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection is required.");
-    return new SqlConnectionStringBuilder(defaultConnection)
+    public async Task<ServiceResult<object>> DeleteAsync(string id, ClaimsPrincipal user)
     {
-        InitialCatalog = "IdentityDb"
-    }.ConnectionString;
+        var project = await repository.GetAsync(id, tracking: true);
+        if (project is null)
+        {
+            return ServiceResult<object>.NotFound("Project was not found.");
+        }
+
+        if (!CanManage(user, project))
+        {
+            return ServiceResult<object>.Forbidden();
+        }
+
+        await repository.DeleteAsync(project);
+        return ServiceResult<object>.NoContent();
+    }
+
+    public async Task<ServiceResult<object>> SubmitAsync(string id, SubmitProjectRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.FileName) || string.IsNullOrWhiteSpace(request.FileUrl))
+        {
+            return ServiceResult<object>.BadRequest("File name and file URL are required.");
+        }
+
+        var project = await repository.GetAsync(id, tracking: true);
+        if (project is null)
+        {
+            return ServiceResult<object>.NotFound("Project was not found.");
+        }
+
+        var submission = await AddSubmissionAsync(project, request.FileName, request.FileUrl, request.SubmittedBy);
+        return ServiceResult<object>.Accepted(new { submission, @event = "project.submitted" });
+    }
+
+    public async Task<ServiceResult<SubmissionItem>> UploadSubmissionAsync(string id, IFormFile file, ClaimsPrincipal user)
+    {
+        var project = await repository.GetAsync(id, tracking: true);
+        if (project is null)
+        {
+            return ServiceResult<SubmissionItem>.NotFound("Project was not found.");
+        }
+
+        if (file.Length == 0)
+        {
+            return ServiceResult<SubmissionItem>.BadRequest("Uploaded file is empty.");
+        }
+
+        var allowedExtensions = new[] { ".pdf", ".doc", ".docx", ".zip" };
+        var originalExtension = Path.GetExtension(file.FileName);
+        if (!allowedExtensions.Contains(originalExtension, StringComparer.OrdinalIgnoreCase))
+        {
+            return ServiceResult<SubmissionItem>.BadRequest("Only PDF, Word, or ZIP submissions are allowed.");
+        }
+
+        var uploadsRoot = Path.Combine(AppContext.BaseDirectory, "uploads");
+        Directory.CreateDirectory(uploadsRoot);
+
+        var safeOriginalName = Path.GetFileName(file.FileName);
+        var storedName = $"{ShortId.New("FILE")}-{safeOriginalName}";
+        var storedPath = Path.Combine(uploadsRoot, storedName);
+        await using (var stream = File.Create(storedPath))
+        {
+            await file.CopyToAsync(stream);
+        }
+
+        var submittedBy = AuthHelpers.GetCurrentUserId(user) ?? user.Identity?.Name ?? "unknown";
+        var submission = await AddSubmissionAsync(project, safeOriginalName, $"/projects/{id}/submissions/files/{storedName}", submittedBy);
+        return ServiceResult<SubmissionItem>.Created(submission);
+    }
+
+    public Task<PagedResult<SubmissionItem>> GetSubmissionHistoryAsync(string id, int? page, int? pageSize) =>
+        repository.GetSubmissionHistoryAsync(id, Paging.Normalize(page, pageSize));
+
+    public async Task<ServiceResult<IReadOnlyList<ProjectMember>>> GetMembersAsync(string id, ClaimsPrincipal user)
+    {
+        var project = await repository.GetAsync(id, tracking: false);
+        if (project is null)
+        {
+            return ServiceResult<IReadOnlyList<ProjectMember>>.NotFound("Project was not found.");
+        }
+
+        var members = await repository.GetMembersAsync(id);
+        return CanAccess(user, project, members)
+            ? ServiceResult<IReadOnlyList<ProjectMember>>.Ok(members)
+            : ServiceResult<IReadOnlyList<ProjectMember>>.NotFound("Project was not found.");
+    }
+
+    public async Task<ServiceResult<ProjectMember>> AddMemberAsync(string id, AssignProjectMemberRequest request, ClaimsPrincipal user)
+    {
+        var studentId = ProjectValidation.NormalizeStudentId(request.StudentId);
+        if (string.IsNullOrWhiteSpace(studentId) || !ProjectValidation.IsValidStudentId(studentId))
+        {
+            return ServiceResult<ProjectMember>.BadRequest("Student ID must start with 2 letters followed by 6 numbers, for example SE192706.");
+        }
+
+        var project = await repository.GetAsync(id, tracking: true);
+        if (project is null)
+        {
+            return ServiceResult<ProjectMember>.NotFound("Project was not found.");
+        }
+
+        if (!CanManage(user, project))
+        {
+            return ServiceResult<ProjectMember>.Forbidden();
+        }
+
+        var missingStudentError = await userProfiles.ValidateStudentsExistAsync([studentId]);
+        if (missingStudentError is not null)
+        {
+            return ServiceResult<ProjectMember>.BadRequest(missingStudentError);
+        }
+
+        if (await repository.MemberExistsAsync(id, studentId))
+        {
+            return ServiceResult<ProjectMember>.Conflict("This student is already assigned to the project.");
+        }
+
+        var member = new ProjectMember
+        {
+            ProjectId = id,
+            StudentId = studentId,
+            IsLeader = false,
+            AddedAt = DateTime.UtcNow
+        };
+        await repository.AddMemberAsync(project, member);
+
+        return ServiceResult<ProjectMember>.Created(member);
+    }
+
+    public async Task<ServiceResult<ProjectItem>> ChangeLeaderAsync(string id, ChangeProjectLeaderRequest request, ClaimsPrincipal user)
+    {
+        var studentId = ProjectValidation.NormalizeStudentId(request.StudentId);
+        if (string.IsNullOrWhiteSpace(studentId) || !ProjectValidation.IsValidStudentId(studentId))
+        {
+            return ServiceResult<ProjectItem>.BadRequest("Student ID must start with 2 letters followed by 6 numbers, for example SE192706.");
+        }
+
+        var project = await repository.GetAsync(id, tracking: true);
+        if (project is null)
+        {
+            return ServiceResult<ProjectItem>.NotFound("Project was not found.");
+        }
+
+        if (!CanManage(user, project))
+        {
+            return ServiceResult<ProjectItem>.Forbidden();
+        }
+
+        var missingStudentError = await userProfiles.ValidateStudentsExistAsync([studentId]);
+        if (missingStudentError is not null)
+        {
+            return ServiceResult<ProjectItem>.BadRequest(missingStudentError);
+        }
+
+        await repository.ChangeLeaderAsync(project, studentId);
+        await events.PublishAsync("project.leader.changed", new
+        {
+            ProjectId = project.Id,
+            project.Title,
+            project.TeamId,
+            TeamLeaderId = studentId,
+            ChangedAt = DateTime.UtcNow
+        });
+
+        return ServiceResult<ProjectItem>.Ok(project);
+    }
+
+    public async Task<ServiceResult<object>> RemoveMemberAsync(string id, string studentId, ClaimsPrincipal user)
+    {
+        var normalizedStudentId = ProjectValidation.NormalizeStudentId(studentId);
+        if (string.IsNullOrWhiteSpace(normalizedStudentId) || !ProjectValidation.IsValidStudentId(normalizedStudentId))
+        {
+            return ServiceResult<object>.BadRequest("Student ID must start with 2 letters followed by 6 numbers, for example SE192706.");
+        }
+
+        var project = await repository.GetAsync(id, tracking: true);
+        if (project is null)
+        {
+            return ServiceResult<object>.NotFound("Project was not found.");
+        }
+
+        if (!CanManage(user, project))
+        {
+            return ServiceResult<object>.Forbidden();
+        }
+
+        var removed = await repository.RemoveMemberAsync(project, normalizedStudentId);
+        return removed ? ServiceResult<object>.NoContent() : ServiceResult<object>.NotFound("Project member was not found.");
+    }
+
+    public async Task<ServiceResult<ProjectItem>> UpdateStatusAsync(string id, UpdateProjectStatusRequest request, ClaimsPrincipal user)
+    {
+        if (!ProjectValidation.IsAllowedProjectStatus(request.Status))
+        {
+            return ServiceResult<ProjectItem>.BadRequest("Status must be Draft, Submitted, In Review, Needs Revision, or Approved.");
+        }
+
+        var project = await repository.GetAsync(id, tracking: true);
+        if (project is null)
+        {
+            return ServiceResult<ProjectItem>.NotFound("Project was not found.");
+        }
+
+        if (!CanManage(user, project))
+        {
+            return ServiceResult<ProjectItem>.Forbidden();
+        }
+
+        project.Status = ProjectValidation.NormalizeProjectStatus(request.Status);
+        project.UpdatedAt = DateTime.UtcNow;
+        await repository.SaveChangesAsync();
+        return ServiceResult<ProjectItem>.Ok(project);
+    }
+
+    private async Task<SubmissionItem> AddSubmissionAsync(ProjectItem project, string fileName, string fileUrl, string submittedBy)
+    {
+        var submission = new SubmissionItem
+        {
+            Id = ShortId.New("SUB"),
+            ProjectId = project.Id,
+            FileName = fileName,
+            FileUrl = fileUrl,
+            Version = 0,
+            SubmittedAt = DateTime.UtcNow,
+            SubmittedBy = submittedBy
+        };
+
+        project.Status = "Submitted";
+        project.UpdatedAt = DateTime.UtcNow;
+        await repository.AddSubmissionAsync(submission);
+        await events.PublishAsync("project.submitted", new
+        {
+            ProjectId = project.Id,
+            project.Title,
+            project.TeamId,
+            project.LecturerId,
+            submission.SubmittedBy,
+            submission.FileName,
+            submission.FileUrl,
+            submission.Version,
+            submission.SubmittedAt
+        });
+
+        return submission;
+    }
+
+    private static bool CanAccess(ClaimsPrincipal user, ProjectItem project, IEnumerable<ProjectMember> members)
+    {
+        if (!AuthHelpers.HasRole(user, "Student"))
+        {
+            return true;
+        }
+
+        var currentUserId = AuthHelpers.GetCurrentUserId(user);
+        return !string.IsNullOrWhiteSpace(currentUserId) &&
+            (string.Equals(project.TeamLeaderId, currentUserId, StringComparison.OrdinalIgnoreCase) ||
+             members.Any(member => string.Equals(member.StudentId, currentUserId, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static bool CanManage(ClaimsPrincipal user, ProjectItem project)
+    {
+        if (AuthHelpers.HasRole(user, "Admin"))
+        {
+            return true;
+        }
+
+        var currentUserId = AuthHelpers.GetCurrentUserId(user);
+        return AuthHelpers.HasRole(user, "Lecturer") &&
+            !string.IsNullOrWhiteSpace(currentUserId) &&
+            string.Equals(project.LecturerId, currentUserId, StringComparison.OrdinalIgnoreCase);
+    }
 }
 
-static async Task<string?> ValidateStudentsExistAsync(IEnumerable<string> studentIds, IdentityLookupDbContext identityDb)
+interface IProjectRepository
 {
-    var requestedIds = studentIds
-        .Where(studentId => !string.IsNullOrWhiteSpace(studentId))
-        .Select(studentId => studentId.Trim().ToUpperInvariant())
-        .Distinct(StringComparer.OrdinalIgnoreCase)
-        .ToList();
+    Task<PagedResult<ProjectItem>> SearchAsync(ProjectSearchCriteria criteria);
+    Task<ProjectItem?> GetAsync(string id, bool tracking);
+    Task<IReadOnlyList<ProjectMember>> GetMembersAsync(string projectId);
+    Task<bool> TeamExistsAsync(string teamId, string? exceptProjectId = null);
+    Task AddAsync(ProjectItem project, IEnumerable<ProjectMember> members);
+    Task DeleteAsync(ProjectItem project);
+    Task ReplaceMembersAsync(string projectId, IReadOnlyList<string> studentIds, string? leaderId);
+    Task<bool> MemberExistsAsync(string projectId, string studentId);
+    Task AddMemberAsync(ProjectItem project, ProjectMember member);
+    Task ChangeLeaderAsync(ProjectItem project, string studentId);
+    Task<bool> RemoveMemberAsync(ProjectItem project, string? studentId);
+    Task<int> GetNextSubmissionVersionAsync(string projectId);
+    Task AddSubmissionAsync(SubmissionItem submission);
+    Task<PagedResult<SubmissionItem>> GetSubmissionHistoryAsync(string projectId, Paging paging);
+    Task SaveChangesAsync();
+}
 
-    if (requestedIds.Count == 0)
+sealed class EfProjectRepository(ProjectDbContext db) : IProjectRepository
+{
+    public async Task<PagedResult<ProjectItem>> SearchAsync(ProjectSearchCriteria criteria)
     {
+        var query = db.Projects.AsNoTracking();
+
+        if (criteria.RestrictToStudent)
+        {
+            if (string.IsNullOrWhiteSpace(criteria.StudentId))
+            {
+                return PagedResult<ProjectItem>.Empty(criteria.Page, criteria.PageSize);
+            }
+
+            var memberProjectIds = await db.ProjectMembers
+                .AsNoTracking()
+                .Where(member => member.StudentId == criteria.StudentId)
+                .Select(member => member.ProjectId)
+                .ToListAsync();
+            query = query.Where(project => project.TeamLeaderId == criteria.StudentId || memberProjectIds.Contains(project.Id));
+        }
+
+        if (!string.IsNullOrWhiteSpace(criteria.Search))
+        {
+            query = query.Where(project =>
+                project.Title.Contains(criteria.Search) ||
+                project.TeamId.Contains(criteria.Search) ||
+                (project.Description != null && project.Description.Contains(criteria.Search)));
+        }
+
+        if (!string.IsNullOrWhiteSpace(criteria.Status))
+        {
+            query = query.Where(project => project.Status == criteria.Status);
+        }
+
+        if (!string.IsNullOrWhiteSpace(criteria.Round))
+        {
+            query = query.Where(project => project.RoundId != null && project.RoundId.Contains(criteria.Round));
+        }
+
+        if (!string.IsNullOrWhiteSpace(criteria.Reviewer))
+        {
+            query = query.Where(project => project.LecturerId == criteria.Reviewer);
+        }
+
+        var totalCount = await query.CountAsync();
+        query = ApplySort(query, criteria.SortBy, criteria.SortDescending);
+
+        var items = await query
+            .Skip((criteria.Page - 1) * criteria.PageSize)
+            .Take(criteria.PageSize)
+            .ToListAsync();
+
+        return new PagedResult<ProjectItem>(items, criteria.Page, criteria.PageSize, totalCount);
+    }
+
+    public Task<ProjectItem?> GetAsync(string id, bool tracking)
+    {
+        var query = tracking ? db.Projects : db.Projects.AsNoTracking();
+        return query.FirstOrDefaultAsync(candidate => candidate.Id == id);
+    }
+
+    public async Task<IReadOnlyList<ProjectMember>> GetMembersAsync(string projectId) =>
+        await db.ProjectMembers
+            .AsNoTracking()
+            .Where(member => member.ProjectId == projectId)
+            .OrderByDescending(member => member.IsLeader)
+            .ThenBy(member => member.StudentId)
+            .ToListAsync();
+
+    public Task<bool> TeamExistsAsync(string teamId, string? exceptProjectId = null) =>
+        db.Projects.AnyAsync(project => project.TeamId == teamId && (exceptProjectId == null || project.Id != exceptProjectId));
+
+    public async Task AddAsync(ProjectItem project, IEnumerable<ProjectMember> members)
+    {
+        db.Projects.Add(project);
+        db.ProjectMembers.AddRange(members);
+        await db.SaveChangesAsync();
+    }
+
+    public async Task DeleteAsync(ProjectItem project)
+    {
+        var submissions = await db.Submissions.Where(submission => submission.ProjectId == project.Id).ToListAsync();
+        var members = await db.ProjectMembers.Where(member => member.ProjectId == project.Id).ToListAsync();
+        db.Submissions.RemoveRange(submissions);
+        db.ProjectMembers.RemoveRange(members);
+        db.Projects.Remove(project);
+        await db.SaveChangesAsync();
+    }
+
+    public async Task ReplaceMembersAsync(string projectId, IReadOnlyList<string> studentIds, string? leaderId)
+    {
+        var existing = await db.ProjectMembers.Where(member => member.ProjectId == projectId).ToListAsync();
+        db.ProjectMembers.RemoveRange(existing);
+        db.ProjectMembers.AddRange(studentIds.Select(studentId => new ProjectMember
+        {
+            ProjectId = projectId,
+            StudentId = studentId,
+            IsLeader = studentId == leaderId,
+            AddedAt = DateTime.UtcNow
+        }));
+    }
+
+    public Task<bool> MemberExistsAsync(string projectId, string studentId) =>
+        db.ProjectMembers.AnyAsync(member => member.ProjectId == projectId && member.StudentId == studentId);
+
+    public async Task AddMemberAsync(ProjectItem project, ProjectMember member)
+    {
+        db.ProjectMembers.Add(member);
+        project.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+    }
+
+    public async Task ChangeLeaderAsync(ProjectItem project, string studentId)
+    {
+        var members = await db.ProjectMembers
+            .Where(member => member.ProjectId == project.Id)
+            .ToListAsync();
+
+        var newLeader = members.FirstOrDefault(member => member.StudentId == studentId);
+        if (newLeader is null)
+        {
+            newLeader = new ProjectMember
+            {
+                ProjectId = project.Id,
+                StudentId = studentId,
+                AddedAt = DateTime.UtcNow
+            };
+            db.ProjectMembers.Add(newLeader);
+            members.Add(newLeader);
+        }
+
+        foreach (var member in members)
+        {
+            member.IsLeader = member.StudentId == studentId;
+        }
+
+        project.TeamLeaderId = studentId;
+        project.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+    }
+
+    public async Task<bool> RemoveMemberAsync(ProjectItem project, string? studentId)
+    {
+        var member = await db.ProjectMembers.FirstOrDefaultAsync(candidate =>
+            candidate.ProjectId == project.Id && candidate.StudentId == studentId);
+        if (member is null)
+        {
+            return false;
+        }
+
+        db.ProjectMembers.Remove(member);
+        if (project.TeamLeaderId == studentId)
+        {
+            project.TeamLeaderId = null;
+        }
+
+        project.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        return true;
+    }
+
+    public async Task<int> GetNextSubmissionVersionAsync(string projectId)
+    {
+        var currentVersion = await db.Submissions
+            .Where(item => item.ProjectId == projectId)
+            .Select(item => (int?)item.Version)
+            .MaxAsync() ?? 0;
+        return currentVersion + 1;
+    }
+
+    public async Task AddSubmissionAsync(SubmissionItem submission)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+        var currentVersion = await db.Submissions
+            .Where(item => item.ProjectId == submission.ProjectId)
+            .Select(item => (int?)item.Version)
+            .MaxAsync() ?? 0;
+        submission.Version = currentVersion + 1;
+        db.Submissions.Add(submission);
+        await db.SaveChangesAsync();
+        await transaction.CommitAsync();
+    }
+
+    public async Task<PagedResult<SubmissionItem>> GetSubmissionHistoryAsync(string projectId, Paging paging)
+    {
+        var query = db.Submissions
+            .AsNoTracking()
+            .Where(item => item.ProjectId == projectId)
+            .OrderByDescending(item => item.Version);
+
+        var totalCount = await query.CountAsync();
+        var items = await query
+            .Skip((paging.Page - 1) * paging.PageSize)
+            .Take(paging.PageSize)
+            .ToListAsync();
+        return new PagedResult<SubmissionItem>(items, paging.Page, paging.PageSize, totalCount);
+    }
+
+    public Task SaveChangesAsync() => db.SaveChangesAsync();
+
+    private static IQueryable<ProjectItem> ApplySort(IQueryable<ProjectItem> query, string sortBy, bool descending)
+    {
+        return (sortBy.ToLowerInvariant(), descending) switch
+        {
+            ("title", false) => query.OrderBy(project => project.Title),
+            ("title", true) => query.OrderByDescending(project => project.Title),
+            ("status", false) => query.OrderBy(project => project.Status),
+            ("status", true) => query.OrderByDescending(project => project.Status),
+            ("team", false) => query.OrderBy(project => project.TeamId),
+            ("team", true) => query.OrderByDescending(project => project.TeamId),
+            ("created", false) => query.OrderBy(project => project.CreatedAt),
+            ("created", true) => query.OrderByDescending(project => project.CreatedAt),
+            ("updated", false) => query.OrderBy(project => project.UpdatedAt),
+            _ => query.OrderByDescending(project => project.UpdatedAt)
+        };
+    }
+}
+
+sealed class UserProfileGateway(UserProfileLookup.UserProfileLookupClient client, ILogger<UserProfileGateway> logger)
+{
+    public async Task<string?> ValidateStudentsExistAsync(IEnumerable<string> studentIds)
+    {
+        foreach (var studentId in studentIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var reply = await client.ValidateStudentAsync(new StudentValidationRequest { StudentId = studentId });
+                if (!reply.IsValid)
+                {
+                    return reply.Message;
+                }
+            }
+            catch (RpcException ex)
+            {
+                logger.LogWarning(ex, "gRPC user profile validation failed for {StudentId}.", studentId);
+                return "User profile gRPC service is unavailable. Please try again later.";
+            }
+        }
+
+        return null;
+    }
+}
+
+static class AuthHelpers
+{
+    public static bool HasRole(ClaimsPrincipal user, params string[] roles)
+    {
+        var roleClaims = user.FindAll("role").Concat(user.FindAll(ClaimTypes.Role));
+        return roleClaims.Any(claim => roles.Any(role => string.Equals(claim.Value, role, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    public static string? GetCurrentUserId(ClaimsPrincipal user) =>
+        user.FindFirst("sub")?.Value
+        ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value
+        ?? user.FindFirst("nameid")?.Value;
+}
+
+static class ProjectValidation
+{
+    public static string? ValidateCreate(CreateProjectRequest request) =>
+        ValidateRequiredProjectFields(request.Title, request.TeamId, request.TeamLeaderId, request.LecturerId, request.MemberStudentIds);
+
+    public static string? ValidateUpdate(UpdateProjectRequest request) =>
+        ValidateRequiredProjectFields(request.Title, request.TeamId, request.TeamLeaderId, request.LecturerId, request.MemberStudentIds);
+
+    private static string? ValidateRequiredProjectFields(string title, string teamId, string? teamLeaderId, string lecturerId, string[]? memberStudentIds)
+    {
+        if (string.IsNullOrWhiteSpace(title) || title.Trim().Length < 3)
+        {
+            return "Project title must be at least 3 characters.";
+        }
+
+        if (string.IsNullOrWhiteSpace(teamId))
+        {
+            return "Team ID is required.";
+        }
+
+        if (string.IsNullOrWhiteSpace(lecturerId))
+        {
+            return "Lecturer ID is required.";
+        }
+
+        var leaderId = NormalizeStudentId(teamLeaderId);
+        if (!string.IsNullOrWhiteSpace(leaderId) && !IsValidStudentId(leaderId))
+        {
+            return "Team leader ID must start with 2 letters followed by 6 numbers, for example SE192706.";
+        }
+
+        foreach (var memberId in memberStudentIds ?? [])
+        {
+            var normalizedMemberId = NormalizeStudentId(memberId);
+            if (string.IsNullOrWhiteSpace(normalizedMemberId) || !IsValidStudentId(normalizedMemberId))
+            {
+                return "Each member Student ID must start with 2 letters followed by 6 numbers, for example SE192706.";
+            }
+        }
+
         return null;
     }
 
-    var existingIds = await identityDb.Users
-        .AsNoTracking()
-        .Where(user => user.IsActive &&
-            user.Role == "Student" &&
-            ((user.StudentId != null && requestedIds.Contains(user.StudentId)) || requestedIds.Contains(user.Id)))
-        .Select(user => user.StudentId ?? user.Id)
-        .ToListAsync();
+    public static List<string> NormalizeMemberIds(string[]? memberStudentIds, string? leaderId)
+    {
+        var members = (memberStudentIds ?? [])
+            .Select(NormalizeStudentId)
+            .Where(memberId => !string.IsNullOrWhiteSpace(memberId))
+            .Select(memberId => memberId!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-    var existingSet = existingIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
-    var missingId = requestedIds.FirstOrDefault(studentId => !existingSet.Contains(studentId));
-    return missingId is null ? null : $"Student ID {missingId} was not found as an active student.";
+        if (!string.IsNullOrWhiteSpace(leaderId))
+        {
+            members.Add(leaderId);
+        }
+
+        return members.OrderBy(memberId => memberId).ToList();
+    }
+
+    public static string? NormalizeStudentId(string? studentId) =>
+        string.IsNullOrWhiteSpace(studentId) ? null : studentId.Trim().ToUpperInvariant();
+
+    public static bool IsValidStudentId(string studentId) =>
+        Regex.IsMatch(studentId, "^[A-Z]{2}\\d{6}$");
+
+    public static bool IsAllowedProjectStatus(string status) => !string.IsNullOrWhiteSpace(NormalizeProjectStatus(status));
+
+    public static string NormalizeProjectStatus(string status)
+    {
+        string[] allowedStatuses = ["Draft", "Submitted", "In Review", "Needs Revision", "Approved"];
+        return allowedStatuses.FirstOrDefault(allowedStatus =>
+            string.Equals(allowedStatus, status?.Trim(), StringComparison.OrdinalIgnoreCase)) ?? "";
+    }
 }
 
-static async Task<bool> StudentExistsAsync(IdentityLookupDbContext identityDb, string studentId) =>
-    await ValidateStudentsExistAsync([studentId], identityDb) is null;
-
-static string NormalizeProjectStatus(string status)
+sealed class IntegrationEventPublisher(IConfiguration configuration, ILogger<IntegrationEventPublisher> logger)
 {
-    string[] allowedStatuses = ["Draft", "Submitted", "In Review", "Needs Revision", "Approved"];
-    return allowedStatuses.FirstOrDefault(allowedStatus =>
-        string.Equals(allowedStatus, status?.Trim(), StringComparison.OrdinalIgnoreCase)) ?? "";
+    public async Task PublishAsync(string eventName, object payload)
+    {
+        try
+        {
+            var config = new ProducerConfig
+            {
+                BootstrapServers = configuration["Kafka:BootstrapServers"] ?? "localhost:9092",
+                Acks = Acks.All
+            };
+            using var producer = new ProducerBuilder<string, string>(config).Build();
+            var envelope = JsonSerializer.Serialize(new IntegrationEvent(eventName, DateTime.UtcNow, payload));
+            await producer.ProduceAsync(eventName, new Message<string, string>
+            {
+                Key = eventName,
+                Value = envelope
+            });
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not publish Kafka integration event {EventName}.", eventName);
+        }
+    }
 }
 
 sealed class ProjectDbContext(DbContextOptions<ProjectDbContext> options) : DbContext(options)
@@ -625,21 +976,16 @@ sealed class ProjectDbContext(DbContextOptions<ProjectDbContext> options) : DbCo
         modelBuilder.Entity<ProjectItem>().ToTable("Projects").HasKey(project => project.Id);
         modelBuilder.Entity<ProjectItem>().HasIndex(project => project.TeamId).IsUnique();
         modelBuilder.Entity<SubmissionItem>().ToTable("Submissions").HasKey(submission => submission.Id);
+        modelBuilder.Entity<SubmissionItem>().HasIndex(submission => new { submission.ProjectId, submission.Version }).IsUnique();
+        modelBuilder.Entity<SubmissionItem>()
+            .HasOne(submission => submission.Project)
+            .WithMany()
+            .HasForeignKey(submission => submission.ProjectId);
         modelBuilder.Entity<ProjectMember>().ToTable("ProjectMembers").HasKey(member => new { member.ProjectId, member.StudentId });
         modelBuilder.Entity<ProjectMember>()
             .HasOne(member => member.Project)
             .WithMany()
             .HasForeignKey(member => member.ProjectId);
-    }
-}
-
-sealed class IdentityLookupDbContext(DbContextOptions<IdentityLookupDbContext> options) : DbContext(options)
-{
-    public DbSet<IdentityUserLookup> Users => Set<IdentityUserLookup>();
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        modelBuilder.Entity<IdentityUserLookup>().ToTable("Users").HasKey(user => user.Id);
     }
 }
 
@@ -666,6 +1012,7 @@ sealed class SubmissionItem
     public int Version { get; set; }
     public DateTime SubmittedAt { get; set; }
     public string SubmittedBy { get; set; } = "";
+    public ProjectItem? Project { get; set; }
 }
 
 sealed class ProjectMember
@@ -677,59 +1024,58 @@ sealed class ProjectMember
     public ProjectItem? Project { get; set; }
 }
 
-sealed class IdentityUserLookup
-{
-    public string Id { get; set; } = "";
-    public string? StudentId { get; set; }
-    public string Role { get; set; } = "";
-    public bool IsActive { get; set; }
-}
-
 static class ShortId
 {
     public static string New(string prefix) => $"{prefix}-{RandomNumberGenerator.GetHexString(8)}";
 }
 
-sealed class IntegrationEventPublisher(IConfiguration configuration, ILogger<IntegrationEventPublisher> logger)
-{
-    private readonly string exchangeName = configuration["RabbitMQ:ExchangeName"] ?? "capstone.events";
-
-    public Task PublishAsync(string eventName, object payload)
-    {
-        try
-        {
-            var factory = new ConnectionFactory
-            {
-                HostName = configuration["RabbitMQ:HostName"] ?? "localhost",
-                Port = int.TryParse(configuration["RabbitMQ:Port"], out var port) ? port : 5672,
-                UserName = configuration["RabbitMQ:UserName"] ?? "guest",
-                Password = configuration["RabbitMQ:Password"] ?? "guest",
-                DispatchConsumersAsync = true
-            };
-            using var connection = factory.CreateConnection();
-            using var channel = connection.CreateModel();
-            channel.ExchangeDeclare(exchangeName, ExchangeType.Topic, durable: true, autoDelete: false);
-
-            var envelope = JsonSerializer.SerializeToUtf8Bytes(new IntegrationEvent(eventName, DateTime.UtcNow, payload));
-            var properties = channel.CreateBasicProperties();
-            properties.Persistent = true;
-            properties.ContentType = "application/json";
-            properties.Type = eventName;
-
-            channel.BasicPublish(exchangeName, eventName, properties, envelope);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Could not publish integration event {EventName}.", eventName);
-        }
-
-        return Task.CompletedTask;
-    }
-}
-
 record IntegrationEvent(string Name, DateTime OccurredAt, object Payload);
-
+record ProjectSearchRequest(string? Search, string? Status, string? Round, string? Reviewer, string? SortBy, string? SortDir, int? Page, int? PageSize);
 record CreateProjectRequest(string Title, string? Description, string TeamId, string? TeamLeaderId, string LecturerId, string? RoundId, string[]? MemberStudentIds);
+record UpdateProjectRequest(string Title, string? Description, string TeamId, string? TeamLeaderId, string LecturerId, string? RoundId, string[]? MemberStudentIds);
 record SubmitProjectRequest(string FileName, string FileUrl, string SubmittedBy);
 record UpdateProjectStatusRequest(string Status);
 record AssignProjectMemberRequest(string StudentId);
+record ChangeProjectLeaderRequest(string StudentId);
+record ProjectSearchCriteria(string? Search, string? Status, string? Round, string? Reviewer, string SortBy, bool SortDescending, int Page, int PageSize, string? StudentId, bool RestrictToStudent)
+{
+    public static ProjectSearchCriteria From(ProjectSearchRequest request, string? studentId, bool restrictToStudent)
+    {
+        var paging = Paging.Normalize(request.Page, request.PageSize);
+        return new ProjectSearchCriteria(
+            string.IsNullOrWhiteSpace(request.Search) ? null : request.Search.Trim(),
+            string.IsNullOrWhiteSpace(request.Status) ? null : request.Status.Trim(),
+            string.IsNullOrWhiteSpace(request.Round) ? null : request.Round.Trim(),
+            string.IsNullOrWhiteSpace(request.Reviewer) ? null : request.Reviewer.Trim(),
+            string.IsNullOrWhiteSpace(request.SortBy) ? "updated" : request.SortBy.Trim(),
+            string.Equals(request.SortDir, "asc", StringComparison.OrdinalIgnoreCase) ? false : true,
+            paging.Page,
+            paging.PageSize,
+            studentId,
+            restrictToStudent);
+    }
+}
+
+record Paging(int Page, int PageSize)
+{
+    public static Paging Normalize(int? page, int? pageSize) =>
+        new(Math.Max(1, page ?? 1), Math.Clamp(pageSize ?? 20, 1, 100));
+}
+
+record PagedResult<T>(IReadOnlyList<T> Items, int Page, int PageSize, int TotalCount)
+{
+    public int TotalPages => TotalCount == 0 ? 0 : (int)Math.Ceiling(TotalCount / (double)PageSize);
+    public static PagedResult<T> Empty(int page, int pageSize) => new([], page, pageSize, 0);
+}
+
+sealed record ServiceResult<T>(int StatusCode, T? Value = default, string? Message = null)
+{
+    public static ServiceResult<T> Ok(T value) => new(StatusCodes.Status200OK, value);
+    public static ServiceResult<T> Created(T value) => new(StatusCodes.Status201Created, value);
+    public static ServiceResult<T> Accepted(T value) => new(StatusCodes.Status202Accepted, value);
+    public static ServiceResult<T> NoContent() => new(StatusCodes.Status204NoContent);
+    public static ServiceResult<T> BadRequest(string message) => new(StatusCodes.Status400BadRequest, default, message);
+    public static ServiceResult<T> Forbidden() => new(StatusCodes.Status403Forbidden);
+    public static ServiceResult<T> NotFound(string message) => new(StatusCodes.Status404NotFound, default, message);
+    public static ServiceResult<T> Conflict(string message) => new(StatusCodes.Status409Conflict, default, message);
+}

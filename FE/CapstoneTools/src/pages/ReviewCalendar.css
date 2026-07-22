@@ -1186,3 +1186,129 @@ body {
         grid-template-columns: 1fr;
     }
 }
+
+.schedule-editor-panel {
+    background: var(--glass-bg);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-lg);
+    padding: 1.25rem;
+}
+
+.schedule-editor-header,
+.schedule-form-actions,
+.slot-management-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.schedule-editor-header h3 {
+    margin: 0;
+    color: #1e3a8a;
+    font-size: 1.1rem;
+}
+
+.schedule-form-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.schedule-form-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    color: #334155;
+    font-size: 0.8rem;
+    font-weight: 700;
+}
+
+.schedule-form-grid input,
+.schedule-form-grid select {
+    width: 100%;
+    border: 1px solid #cbd5e1;
+    border-radius: var(--radius-md);
+    padding: 0.55rem 0.65rem;
+    color: #1f2937;
+    background: #fff;
+    font-size: 0.875rem;
+}
+
+.schedule-form-wide {
+    grid-column: span 3;
+}
+
+.schedule-form-error {
+    margin: 1rem 0 0;
+    color: #b91c1c;
+    background: #fee2e2;
+    border: 1px solid #fecaca;
+    border-radius: var(--radius-md);
+    padding: 0.65rem 0.75rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.schedule-form-actions {
+    justify-content: flex-start;
+    margin-top: 1rem;
+}
+
+.btn-manage-slot {
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    color: #1f2937;
+    border-radius: var(--radius-md);
+    padding: 0.45rem 0.75rem;
+    font-size: 0.8rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.btn-manage-slot:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-sm);
+}
+
+.btn-manage-slot:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+}
+
+.btn-manage-slot.primary {
+    background: var(--calendar-primary);
+    border-color: var(--calendar-primary);
+    color: #fff;
+}
+
+.btn-manage-slot.danger {
+    background: #dc2626;
+    border-color: #dc2626;
+    color: #fff;
+}
+
+.btn-manage-slot.ghost {
+    background: transparent;
+}
+
+.slot-management-actions {
+    justify-content: flex-start;
+    margin-top: 0.85rem;
+}
+
+@media (max-width: 768px) {
+    .schedule-form-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .schedule-form-wide {
+        grid-column: span 1;
+    }
+}

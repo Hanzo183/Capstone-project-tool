@@ -166,7 +166,7 @@ export default function Login() {
                                 className="forgot-password-link"
                                 onClick={() => setShowForgotPassword(true)}
                             >
-                                Forgot Password?
+                                
                             </button>
                         </div>
 

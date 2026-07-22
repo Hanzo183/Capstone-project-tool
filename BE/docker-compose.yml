@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # --- Infrastructure ---
   sqlserver:
@@ -14,12 +12,23 @@ services:
     networks:
       - capstone-network
 
-  rabbitmq:
-    image: rabbitmq:3-management
-    container_name: rabbitmq
+  kafka:
+    image: apache/kafka:3.7.2
+    container_name: kafka
+    environment:
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
     ports:
-      - "5672:5672"   # AMQP port
-      - "15672:15672" # Management UI
+      - "9092:9092"
     networks:
       - capstone-network
 
@@ -33,13 +42,14 @@ services:
       - "5000:8080"
     environment:
       - Jwt__SigningKey=capstone-review-tool-development-signing-key
-      - RabbitMQ__HostName=rabbitmq
+      - Kafka__BootstrapServers=kafka:9092
     depends_on:
       - identity-svc
       - project-svc
       - scheduling-svc
       - evaluation-svc
       - notification-svc
+      - user-profile-svc
     networks:
       - capstone-network
 
@@ -52,7 +62,7 @@ services:
     environment:
       - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=IdentityDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
       - Jwt__SigningKey=capstone-review-tool-development-signing-key
-      - RabbitMQ__HostName=rabbitmq
+      - Kafka__BootstrapServers=kafka:9092
     ports:
       - "8081:8080" # Exposed for direct debugging if needed, but normally routed through YARP
     depends_on:
@@ -68,14 +78,16 @@ services:
     environment:
       - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=ProjectDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
       - Jwt__SigningKey=capstone-review-tool-development-signing-key
-      - RabbitMQ__HostName=rabbitmq
+      - Kafka__BootstrapServers=kafka:9092
+      - Grpc__UserProfileAddress=http://user-profile-svc:8080
     ports:
       - "8082:8080"
     volumes:
       - project-uploads:/app/uploads
     depends_on:
       - sqlserver
-      - rabbitmq
+      - kafka
+      - user-profile-svc
     networks:
       - capstone-network
 
@@ -87,12 +99,12 @@ services:
     environment:
       - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=SchedulingDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
       - Jwt__SigningKey=capstone-review-tool-development-signing-key
-      - RabbitMQ__HostName=rabbitmq
+      - Kafka__BootstrapServers=kafka:9092
     ports:
       - "8083:8080"
     depends_on:
       - sqlserver
-      - rabbitmq
+      - kafka
     networks:
       - capstone-network
 
@@ -104,12 +116,12 @@ services:
     environment:
       - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=EvaluationDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
       - Jwt__SigningKey=capstone-review-tool-development-signing-key
-      - RabbitMQ__HostName=rabbitmq
+      - Kafka__BootstrapServers=kafka:9092
     ports:
       - "8084:8080"
     depends_on:
       - sqlserver
-      - rabbitmq
+      - kafka
     networks:
       - capstone-network
 
@@ -121,12 +133,29 @@ services:
     environment:
       - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=NotificationDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
       - Jwt__SigningKey=capstone-review-tool-development-signing-key
-      - RabbitMQ__HostName=rabbitmq
-      - RabbitMQ__NotificationQueue=notification-service
+      - Kafka__BootstrapServers=kafka:9092
+      - Kafka__GroupId=notification-service
     ports:
       - "8085:8080"
     depends_on:
-      - rabbitmq
+      - sqlserver
+      - kafka
+    networks:
+      - capstone-network
+
+  user-profile-svc:
+    build:
+      context: ./UserProfileService
+      dockerfile: Dockerfile
+    container_name: user-profile-svc
+    environment:
+      - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=IdentityDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
+      - ASPNETCORE_URLS=http://+:8080
+      - Kestrel__EndpointDefaults__Protocols=Http2
+    ports:
+      - "8086:8080"
+    depends_on:
+      - sqlserver
     networks:
       - capstone-network
 

@@ -31,7 +31,7 @@ export default function CouncilDashboard() {
     const [evaluationsTodo, setEvaluationsTodo] = useState<Project[]>([]);
     const [rebuttals, setRebuttals] = useState<Rebuttal[]>([]);
     const [upcomingSlots, setUpcomingSlots] = useState<ReviewSlot[]>([]);
-    
+
     // Evaluation Form State
     const [selectedProjectForEval, setSelectedProjectForEval] = useState<Project | null>(null);
     const [evalScore, setEvalScore] = useState<number>(8);
@@ -48,8 +48,8 @@ export default function CouncilDashboard() {
     const [errorMsg, setErrorMsg] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
 
-    const userId = localStorage.getItem('userId') || 'C101';
-    const fullName = localStorage.getItem('fullName') || 'Dr. Nguyen Van A';
+    const userId = localStorage.getItem('userId') || 'CM001';
+    const fullName = localStorage.getItem('fullName') || 'Council Reviewer';
 
     const loadCouncilData = async () => {
         setIsLoading(true);
@@ -60,52 +60,48 @@ export default function CouncilDashboard() {
             try {
                 projectsData = await api.getProjects();
             } catch (err) {
-                console.warn("Failed to fetch projects from API, using fallback data:", err);
+                console.warn("Failed to fetch projects from API:", err);
             }
 
-            // Mock fallback if empty or offline
-            if (!projectsData || projectsData.length === 0) {
-                projectsData = [
-                    { id: 'P101', title: 'Microservices E-Commerce App', team: 'Team G1', lecturer: 'Prof. Le C', status: 'In Review', round: 'Spring 2026', updatedAt: '2026-06-20' },
-                    { id: 'P102', title: 'AI Smart Agriculture Tracking', team: 'Team G2', lecturer: 'Prof. Le C', status: 'Submitted', round: 'Spring 2026', updatedAt: '2026-06-21' },
-                    { id: 'P103', title: 'Blockchain Supply Chain Ledger', team: 'Team G3', lecturer: 'Dr. Tran B', status: 'Approved', round: 'Spring 2026', updatedAt: '2026-06-22' },
-                    { id: 'P104', title: 'IoT Weather Forecasting Station', team: 'Team G4', lecturer: 'Dr. Nguyen Van A', status: 'Submitted', round: 'Spring 2026', updatedAt: '2026-06-23' }
-                ];
-            }
-
-            const parsedProjects: Project[] = projectsData.map(p => ({
+            const parsedProjects: Project[] = (Array.isArray(projectsData) ? projectsData : []).map((p: any) => ({
                 id: p.id,
-                title: p.title || p.topicName || 'Untitled Project',
-                team: p.team || p.groupCode || 'Team Alpha',
-                lecturer: p.lecturer || p.supervisorId || 'Advisor',
-                status: (p.status || 'Submitted') as any,
-                round: p.round || 'Initial Round',
-                updatedAt: p.updatedAt || p.createdAt || 'Just now'
+                title: p.title || p.topicName || '',
+                team: p.teamId || p.team || p.groupCode || '',
+                lecturer: p.lecturerId || p.lecturer || p.supervisorId || '',
+                status: (p.status || 'Draft') as any,
+                round: p.roundId || p.round || '',
+                updatedAt: p.updatedAt || p.createdAt || ''
             }));
-
-            // Assigned to this council member (filter or mock context)
-            setAssignedProjects(parsedProjects);
-
-            // Evaluations to do: projects with Submitted or In Review status
-            const todo = parsedProjects.filter(p => p.status === 'Submitted' || p.status === 'In Review');
-            setEvaluationsTodo(todo);
 
             // Fetch slots
             let slotsData: any[] = [];
             try {
                 slotsData = await api.getScheduleSlots();
             } catch (err) {
-                console.warn("Failed to fetch slots from API, using fallback:", err);
+                console.warn("Failed to fetch slots from API:", err);
             }
 
-            if (!slotsData || slotsData.length === 0) {
-                slotsData = [
-                    { id: 'R1', projectId: 'P101', projectTitle: 'Microservices E-Commerce App', room: 'Alpha 105', time: '2026-06-25 10:00 AM', council: ['Dr. Nguyen Van A', 'Prof. Le C'], type: 'Initial Review' },
-                    { id: 'R2', projectId: 'P102', projectTitle: 'AI Smart Agriculture Tracking', room: 'Beta 202', time: '2026-06-25 02:00 PM', council: ['Dr. Nguyen Van A', 'Prof. Le C'], type: 'Initial Review' }
-                ];
-            }
+            const upcoming = (Array.isArray(slotsData) ? slotsData : [])
+                .map((s: any, idx: number) => ({
+                    id: s.id || `S${idx}`,
+                    projectId: s.projectId || '',
+                    projectTitle: s.projectTitle || s.title || 'Untitled Project',
+                    room: s.room || 'Room TBD',
+                    time: s.time || s.reviewDate || 'Not scheduled',
+                    council: s.council || s.councilMemberIds || s.reviewerIds || [],
+                    type: s.type || 'Initial Review'
+                }))
+                .filter((s: ReviewSlot) => s.council.some((c: string) => c === userId || c === fullName));
 
-            setUpcomingSlots(slotsData.filter((s: any) => s.council && s.council.some((c: string) => c.includes(fullName) || c.includes('Nguyen Van A'))));
+            setUpcomingSlots(upcoming);
+
+            const assignedProjectIds = new Set(upcoming.map(slot => slot.projectId));
+            const assigned = parsedProjects.filter(project => assignedProjectIds.has(project.id));
+            setAssignedProjects(assigned);
+
+            // Evaluations to do: assigned projects with Submitted or In Review status
+            const todo = assigned.filter(p => p.status === 'Submitted' || p.status === 'In Review');
+            setEvaluationsTodo(todo);
 
             let rebuttalData: Rebuttal[] = [];
             try {
@@ -149,9 +145,14 @@ export default function CouncilDashboard() {
         loadCouncilData();
     }, []);
 
+    // --- ✅ FIXED: EVALUATION SUBMIT (NO STATUS UPDATE) ---
     const handleEvaluationSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!selectedProjectForEval) return;
+        if (!selectedProjectForEval.round) {
+            setErrorMsg('This project does not have a review round assigned.');
+            return;
+        }
         setSubmittingEval(true);
         setSuccessMsg('');
         setErrorMsg('');
@@ -159,27 +160,25 @@ export default function CouncilDashboard() {
         try {
             await api.createEvaluation({
                 projectId: selectedProjectForEval.id,
-                roundId: 'RND001', // Standard round
+                roundId: selectedProjectForEval.round,
                 evaluatorId: userId,
                 score: evalScore,
                 feedback: evalFeedback
             });
 
-            setSuccessMsg(`Successfully submitted evaluation for ${selectedProjectForEval.title}!`);
-            
+            setSuccessMsg(`✅ Evaluation submitted! Lecturer will update project status.`);
+
             // Remove project from TODO list
             setEvaluationsTodo(prev => prev.filter(p => p.id !== selectedProjectForEval.id));
             setSelectedProjectForEval(null);
             setEvalFeedback('');
             setEvalScore(8);
+
+            // Refresh data
+            await loadCouncilData();
         } catch (err: any) {
-            console.error("API call failed, updating local state for mock demo:", err);
-            // Mock success in local view to ensure the user gets a working demo
-            setSuccessMsg(`Successfully submitted evaluation (Demo Mode) for ${selectedProjectForEval.title}!`);
-            setEvaluationsTodo(prev => prev.filter(p => p.id !== selectedProjectForEval.id));
-            setSelectedProjectForEval(null);
-            setEvalFeedback('');
-            setEvalScore(8);
+            console.error("Failed to submit evaluation:", err);
+            setErrorMsg('Failed to submit evaluation. Please try again.');
         } finally {
             setSubmittingEval(false);
         }
@@ -195,13 +194,16 @@ export default function CouncilDashboard() {
         try {
             await api.respondToRebuttal(selectedRebuttal.id, rebuttalResponse);
             await api.updateRebuttalStatus(selectedRebuttal.id, rebuttalDecision);
-            setSuccessMsg(`Successfully responded to rebuttal from ${selectedRebuttal.studentName}!`);
-            
+            setSuccessMsg(`✅ Successfully responded to rebuttal from ${selectedRebuttal.studentName}!`);
+
             // Update local state
             setRebuttals(prev => prev.map(r => r.id === selectedRebuttal.id ? { ...r, status: rebuttalDecision, response: rebuttalResponse } : r));
             setSelectedRebuttal(null);
             setRebuttalResponse('');
             setRebuttalDecision('Approved');
+
+            // Refresh data
+            await loadCouncilData();
         } catch (err: any) {
             console.error("Failed to respond to rebuttal:", err);
             setErrorMsg('Failed to respond to rebuttal. Please try again.');
@@ -246,8 +248,8 @@ export default function CouncilDashboard() {
                                             <h4>{project.title}</h4>
                                             <p>Team: <strong>{project.team}</strong> | Mentor: {project.lecturer}</p>
                                         </div>
-                                        <button 
-                                            className="action-btn-primary" 
+                                        <button
+                                            className="action-btn-primary"
                                             onClick={() => setSelectedProjectForEval(project)}
                                         >
                                             Evaluate
@@ -265,37 +267,37 @@ export default function CouncilDashboard() {
                             <form onSubmit={handleEvaluationSubmit} className="feedback-scoring-form">
                                 <div className="form-input-group">
                                     <label htmlFor="score-range-slider">Score (0 - 10): <span className="score-val-badge">{evalScore}</span></label>
-                                    <input 
-                                        type="range" 
-                                        id="score-range-slider" 
-                                        min="0" 
-                                        max="10" 
+                                    <input
+                                        type="range"
+                                        id="score-range-slider"
+                                        min="0"
+                                        max="10"
                                         step="0.5"
-                                        value={evalScore} 
-                                        onChange={(e) => setEvalScore(parseFloat(e.target.value))} 
+                                        value={evalScore}
+                                        onChange={(e) => setEvalScore(parseFloat(e.target.value))}
                                     />
                                 </div>
                                 <div className="form-input-group">
                                     <label htmlFor="evaluation-feedback-text">Feedback Comments</label>
-                                    <textarea 
-                                        id="evaluation-feedback-text" 
+                                    <textarea
+                                        id="evaluation-feedback-text"
                                         rows={4}
-                                        placeholder="Add constructive comments, strengths, weaknesses..." 
+                                        placeholder="Add constructive comments, strengths, weaknesses..."
                                         value={evalFeedback}
                                         onChange={(e) => setEvalFeedback(e.target.value)}
                                         required
                                     />
                                 </div>
                                 <div className="form-button-actions">
-                                    <button 
-                                        type="button" 
-                                        className="btn-cancel" 
+                                    <button
+                                        type="button"
+                                        className="btn-cancel"
                                         onClick={() => setSelectedProjectForEval(null)}
                                     >
                                         Cancel
                                     </button>
-                                    <button 
-                                        type="submit" 
+                                    <button
+                                        type="submit"
                                         className="btn-submit"
                                         disabled={submittingEval}
                                     >
@@ -320,15 +322,15 @@ export default function CouncilDashboard() {
                                             <span className="project-tag">{rebuttal.projectTitle}</span>
                                         </div>
                                         <p className="rebuttal-content-text">"{rebuttal.content}"</p>
-                                        
+
                                         {rebuttal.response ? (
                                             <div className="rebuttal-response-display">
                                                 <strong>Your response:</strong>
                                                 <p>{rebuttal.response}</p>
                                             </div>
                                         ) : (
-                                            <button 
-                                                className="action-btn-secondary" 
+                                            <button
+                                                className="action-btn-secondary"
                                                 onClick={() => {
                                                     setSelectedRebuttal(rebuttal);
                                                     setRebuttalResponse('');
@@ -363,19 +365,19 @@ export default function CouncilDashboard() {
                                 </div>
                                 <div className="form-input-group">
                                     <label htmlFor="rebuttal-response-text">Your Response Message</label>
-                                    <textarea 
-                                        id="rebuttal-response-text" 
+                                    <textarea
+                                        id="rebuttal-response-text"
                                         rows={3}
-                                        placeholder="Type your rebuttal response decision here..." 
+                                        placeholder="Type your rebuttal response decision here..."
                                         value={rebuttalResponse}
                                         onChange={(e) => setRebuttalResponse(e.target.value)}
                                         required
                                     />
                                 </div>
                                 <div className="form-button-actions">
-                                    <button 
-                                        type="button" 
-                                        className="btn-cancel" 
+                                    <button
+                                        type="button"
+                                        className="btn-cancel"
                                         onClick={() => {
                                             setSelectedRebuttal(null);
                                             setRebuttalResponse('');
@@ -384,8 +386,8 @@ export default function CouncilDashboard() {
                                     >
                                         Cancel
                                     </button>
-                                    <button 
-                                        type="submit" 
+                                    <button
+                                        type="submit"
                                         className="btn-submit"
                                         disabled={submittingRebuttal}
                                     >
