@@ -1,5 +1,5 @@
 // src/pages/CouncilDashboard.tsx
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { api } from '../api';
 import type { Project, ReviewSlot } from '../types';
 import './CouncilDashboard.css';
@@ -45,25 +45,17 @@ export default function CouncilDashboard() {
     const [submittingRebuttal, setSubmittingRebuttal] = useState(false);
 
     const [isLoading, setIsLoading] = useState(true);
-    const [isRefreshing, setIsRefreshing] = useState(false);
     const [errorMsg, setErrorMsg] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
 
     const userId = localStorage.getItem('userId') || 'CM001';
     const fullName = localStorage.getItem('fullName') || 'Council Reviewer';
 
-    // --- LOAD DATA ---
-    const loadCouncilData = useCallback(async (showLoading: boolean = true) => {
-        if (showLoading) {
-            setIsLoading(true);
-        } else {
-            setIsRefreshing(true);
-        }
+    const loadCouncilData = async () => {
+        setIsLoading(true);
         setErrorMsg('');
-        setSuccessMsg('');
-
         try {
-            // --- 1. FETCH ALL PROJECTS ---
+            // Get all projects
             let projectsData: any[] = [];
             try {
                 projectsData = await api.getProjects();
@@ -81,53 +73,36 @@ export default function CouncilDashboard() {
                 updatedAt: p.updatedAt || p.createdAt || ''
             }));
 
-            // --- 2. CREATE PROJECTS MAP FOR QUICK LOOKUP ---
-            const projectsMap = parsedProjects.reduce<Record<string, Project>>((map, project) => {
-                map[project.id] = project;
-                return map;
-            }, {});
-
-            // --- 3. FETCH SCHEDULE SLOTS ---
+            // Fetch slots
             let slotsData: any[] = [];
             try {
                 slotsData = await api.getScheduleSlots();
-                console.log('📅 Raw schedule slots:', slotsData);
             } catch (err) {
                 console.warn("Failed to fetch slots from API:", err);
             }
 
-            // --- 4. MAP SLOTS WITH REAL PROJECT TITLES ---
             const upcoming = (Array.isArray(slotsData) ? slotsData : [])
-                .map((s: any) => {
-                    const project = projectsMap[s.projectId];
-                    return {
-                        id: s.id,
-                        projectId: s.projectId,
-                        projectTitle: project?.title || 'Unknown Project',
-                        room: s.room || 'Room TBD',
-                        time: s.reviewDate || s.time || 'Not scheduled',
-                        council: s.councilMemberIds || s.reviewerIds || [],
-                        type: s.type || 'Initial Review'
-                    };
-                })
-                .filter((s: ReviewSlot) => {
-                    // Only show slots where this council member is assigned
-                    return s.council.some((c: string) => c === userId || c === fullName);
-                });
+                .map((s: any, idx: number) => ({
+                    id: s.id || `S${idx}`,
+                    projectId: s.projectId || '',
+                    projectTitle: s.projectTitle || s.title || 'Untitled Project',
+                    room: s.room || 'Room TBD',
+                    time: s.time || s.reviewDate || 'Not scheduled',
+                    council: s.council || s.councilMemberIds || s.reviewerIds || [],
+                    type: s.type || 'Initial Review'
+                }))
+                .filter((s: ReviewSlot) => s.council.some((c: string) => c === userId || c === fullName));
 
-            console.log('📅 Mapped upcoming slots:', upcoming);
             setUpcomingSlots(upcoming);
 
-            // --- 5. ASSIGNED PROJECTS ---
             const assignedProjectIds = new Set(upcoming.map(slot => slot.projectId));
             const assigned = parsedProjects.filter(project => assignedProjectIds.has(project.id));
             setAssignedProjects(assigned);
 
-            // --- 6. EVALUATIONS QUEUE ---
+            // Evaluations to do: assigned projects with Submitted or In Review status
             const todo = assigned.filter(p => p.status === 'Submitted' || p.status === 'In Review');
             setEvaluationsTodo(todo);
 
-            // --- 7. FETCH REBUTTALS ---
             let rebuttalData: Rebuttal[] = [];
             try {
                 const [pendingRebuttals, evaluations] = await Promise.all([
@@ -163,37 +138,14 @@ export default function CouncilDashboard() {
             console.error(err);
         } finally {
             setIsLoading(false);
-            setIsRefreshing(false);
-        }
-    }, [userId, fullName]);
-
-    // --- INITIAL LOAD + AUTO-REFRESH ON FOCUS ---
-    useEffect(() => {
-        loadCouncilData(true);
-
-        // Auto-refresh when page gets focus (user clicks back to tab)
-        const handleFocus = () => {
-            if (!isLoading && !isRefreshing) {
-                loadCouncilData(false);
-            }
-        };
-        window.addEventListener('focus', handleFocus);
-
-        return () => {
-            window.removeEventListener('focus', handleFocus);
-        };
-    }, [loadCouncilData]);
-
-    // --- MANUAL REFRESH ---
-    const handleRefresh = async () => {
-        await loadCouncilData(false);
-        if (!errorMsg) {
-            setSuccessMsg('✅ Data refreshed successfully!');
-            setTimeout(() => setSuccessMsg(''), 3000);
         }
     };
 
-    // --- EVALUATION SUBMIT ---
+    useEffect(() => {
+        loadCouncilData();
+    }, []);
+
+    // --- ✅ FIXED: EVALUATION SUBMIT (NO STATUS UPDATE) ---
     const handleEvaluationSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!selectedProjectForEval) return;
@@ -214,14 +166,16 @@ export default function CouncilDashboard() {
                 feedback: evalFeedback
             });
 
-            setSuccessMsg(`✅ Successfully submitted evaluation for ${selectedProjectForEval.title}!`);
+            setSuccessMsg(`✅ Evaluation submitted! Lecturer will update project status.`);
 
-            // Refresh data after submit
-            await loadCouncilData(false);
-
+            // Remove project from TODO list
+            setEvaluationsTodo(prev => prev.filter(p => p.id !== selectedProjectForEval.id));
             setSelectedProjectForEval(null);
             setEvalFeedback('');
             setEvalScore(8);
+
+            // Refresh data
+            await loadCouncilData();
         } catch (err: any) {
             console.error("Failed to submit evaluation:", err);
             setErrorMsg('Failed to submit evaluation. Please try again.');
@@ -230,7 +184,6 @@ export default function CouncilDashboard() {
         }
     };
 
-    // --- REBUTTAL SUBMIT ---
     const handleRebuttalSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!selectedRebuttal) return;
@@ -243,12 +196,14 @@ export default function CouncilDashboard() {
             await api.updateRebuttalStatus(selectedRebuttal.id, rebuttalDecision);
             setSuccessMsg(`✅ Successfully responded to rebuttal from ${selectedRebuttal.studentName}!`);
 
-            // Refresh data after submit
-            await loadCouncilData(false);
-
+            // Update local state
+            setRebuttals(prev => prev.map(r => r.id === selectedRebuttal.id ? { ...r, status: rebuttalDecision, response: rebuttalResponse } : r));
             setSelectedRebuttal(null);
             setRebuttalResponse('');
             setRebuttalDecision('Approved');
+
+            // Refresh data
+            await loadCouncilData();
         } catch (err: any) {
             console.error("Failed to respond to rebuttal:", err);
             setErrorMsg('Failed to respond to rebuttal. Please try again.');
@@ -268,65 +223,19 @@ export default function CouncilDashboard() {
 
     return (
         <div className="council-dashboard-container">
-            {/* --- HEADER WITH REFRESH BUTTON --- */}
             <header className="dashboard-header-block">
                 <div>
                     <h2 className="dashboard-main-title">Council Member Panel</h2>
+                    <p className="dashboard-subtitle">Manage assigned evaluations, student rebuttals, and upcoming schedules</p>
                 </div>
-                <button
-                    className="refresh-btn"
-                    onClick={handleRefresh}
-                    disabled={isRefreshing}
-                    style={{
-                        padding: '0.5rem 1.5rem',
-                        background: isRefreshing ? '#94a3b8' : '#3b82f6',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '8px',
-                        cursor: isRefreshing ? 'not-allowed' : 'pointer',
-                        fontWeight: '600',
-                        display: 'none',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        transition: 'background 0.2s'
-                    }}
-                >
-                    🔄 {isRefreshing ? 'Refreshing...' : 'Refresh Data'}
-                </button>
             </header>
 
-            {/* --- TOAST MESSAGES --- */}
-            {successMsg && (
-                <div className="toast-success-alert" style={{
-                    background: '#dcfce7',
-                    color: '#16a34a',
-                    padding: '0.75rem 1rem',
-                    borderRadius: '8px',
-                    marginBottom: '1rem',
-                    border: '1px solid #bbf7d0'
-                }}>
-                    ✅ {successMsg}
-                </div>
-            )}
-            {errorMsg && (
-                <div className="toast-error-alert" style={{
-                    background: '#fee2e2',
-                    color: '#dc2626',
-                    padding: '0.75rem 1rem',
-                    borderRadius: '8px',
-                    marginBottom: '1rem',
-                    border: '1px solid #fecaca'
-                }}>
-                    ❌ {errorMsg}
-                </div>
-            )}
+            {successMsg && <div className="toast-success-alert">✅ {successMsg}</div>}
+            {errorMsg && <div className="toast-error-alert">❌ {errorMsg}</div>}
 
-            {/* --- MAIN GRID --- */}
             <div className="dashboard-grid-layout">
-                {/* LEFT: Tasks Queue */}
+                {/* Left Side: Tasks queue */}
                 <div className="dashboard-primary-section">
-
-                    {/* Evaluations Queue */}
                     <section className="glass-card-section">
                         <h3 className="section-title-label">📋 Evaluations Queue</h3>
                         {evaluationsTodo.length === 0 ? (
@@ -399,7 +308,7 @@ export default function CouncilDashboard() {
                         </section>
                     )}
 
-                    {/* Rebuttals Awaiting Response */}
+                    {/* Rebuttals awaiting response */}
                     <section className="glass-card-section">
                         <h3 className="section-title-label">💬 Rebuttals Awaiting Response</h3>
                         {rebuttals.length === 0 ? (
@@ -490,35 +399,28 @@ export default function CouncilDashboard() {
                     )}
                 </div>
 
-                {/* RIGHT: Assigned Projects & Schedules */}
+                {/* Right Side: Assigned Projects list & Schedules */}
                 <div className="dashboard-secondary-section">
-
-                    {/* Assigned Projects */}
                     <section className="glass-card-section">
                         <h3 className="section-title-label">🛡️ Assigned Projects</h3>
                         <div className="assigned-projects-list">
-                            {assignedProjects.length === 0 ? (
-                                <p className="no-records-message">No assigned projects found.</p>
-                            ) : (
-                                assignedProjects.map(proj => (
-                                    <div key={proj.id} className="project-compact-card">
-                                        <div className="card-top">
-                                            <h4>{proj.title}</h4>
-                                            <span className={`status-badge-indicator ${proj.status.toLowerCase().replace(' ', '-')}`}>
-                                                {proj.status}
-                                            </span>
-                                        </div>
-                                        <div className="card-bottom">
-                                            <p>Team: {proj.team}</p>
-                                            <p>Round: {proj.round}</p>
-                                        </div>
+                            {assignedProjects.map(proj => (
+                                <div key={proj.id} className="project-compact-card">
+                                    <div className="card-top">
+                                        <h4>{proj.title}</h4>
+                                        <span className={`status-badge-indicator ${proj.status.toLowerCase().replace(' ', '-')}`}>
+                                            {proj.status}
+                                        </span>
                                     </div>
-                                ))
-                            )}
+                                    <div className="card-bottom">
+                                        <p>Team: {proj.team}</p>
+                                        <p>Round: {proj.round}</p>
+                                    </div>
+                                </div>
+                            ))}
                         </div>
                     </section>
 
-                    {/* Upcoming Review Slots */}
                     <section className="glass-card-section">
                         <h3 className="section-title-label">📅 Upcoming Review Slots</h3>
                         {upcomingSlots.length === 0 ? (
@@ -527,9 +429,7 @@ export default function CouncilDashboard() {
                             <div className="slots-timeline-list">
                                 {upcomingSlots.map(slot => (
                                     <div key={slot.id} className="slot-timeline-card">
-                                        <div className="timeline-badge-time">
-                                            {new Date(slot.time).toLocaleString()}
-                                        </div>
+                                        <div className="timeline-badge-time">{slot.time}</div>
                                         <div className="slot-card-body">
                                             <h4>{slot.projectTitle}</h4>
                                             <p>Room: <strong>{slot.room}</strong> | Type: {slot.type}</p>
