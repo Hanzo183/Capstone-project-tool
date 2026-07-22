@@ -340,7 +340,7 @@ export default function ReviewCalendar() {
                     {formError && <p className="schedule-form-error">{formError}</p>}
 
                     <div className="schedule-form-grid">
-                        <label>
+                        <label style={{ display: 'none' }}>
                             Round
                             <select value={slotForm.roundId} onChange={(e) => setSlotForm({ ...slotForm, roundId: e.target.value })} required>
                                 <option value="">Select round</option>
