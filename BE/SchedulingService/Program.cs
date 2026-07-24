@@ -106,15 +106,12 @@ app.UseHangfireDashboard("/hangfire", new DashboardOptions
     Authorization = new[] { new AdminDashboardAuthorizationFilter() }
 });
 
-RecurringJob.AddOrUpdate<SchedulingJobs>(
-    "deadline-reminder-job",
-    job => job.PublishDeadlineRemindersAsync(),
-    "0 */6 * * *");
-
-RecurringJob.AddOrUpdate<SchedulingJobs>(
-    "round-status-updater-job",
-    job => job.UpdateRoundStatusesAsync(),
-    Cron.Daily(0));
+var hangfireStartupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("HangfireStartup");
+app.Lifetime.ApplicationStarted.Register(() =>
+    _ = Task.Run(() => RegisterRecurringJobsWithRetryAsync(
+        app.Services,
+        hangfireStartupLogger,
+        app.Lifetime.ApplicationStopping)));
 
 app.MapGet("/health", async (SchedulingDbContext db) =>
 {
@@ -450,6 +447,48 @@ app.MapPost("/schedule/jobs/round-status", async (SchedulingJobs jobs) =>
 }).RequireAuthorization("AdminOnly");
 
 app.Run();
+
+static async Task RegisterRecurringJobsWithRetryAsync(IServiceProvider services, ILogger logger, CancellationToken stoppingToken)
+{
+    var attempt = 1;
+
+    while (!stoppingToken.IsCancellationRequested)
+    {
+        try
+        {
+            using var scope = services.CreateScope();
+            var recurringJobs = scope.ServiceProvider.GetRequiredService<IRecurringJobManager>();
+
+            recurringJobs.AddOrUpdate<SchedulingJobs>(
+                "deadline-reminder-job",
+                job => job.PublishDeadlineRemindersAsync(),
+                "0 */6 * * *");
+
+            recurringJobs.AddOrUpdate<SchedulingJobs>(
+                "round-status-updater-job",
+                job => job.UpdateRoundStatusesAsync(),
+                Cron.Daily(0));
+
+            logger.LogInformation("Hangfire recurring jobs registered successfully.");
+            return;
+        }
+        catch (Exception ex)
+        {
+            var delay = TimeSpan.FromSeconds(Math.Min(30, attempt * 5));
+            logger.LogWarning(ex, "Could not register Hangfire recurring jobs. Retrying in {DelaySeconds} seconds.", delay.TotalSeconds);
+            attempt++;
+
+            try
+            {
+                await Task.Delay(delay, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+        }
+    }
+}
 
 static async Task<IEnumerable<ScheduleSlotResponse>> BuildSlotResponsesAsync(List<ScheduleSlot> slots, SchedulingDbContext db)
 {
