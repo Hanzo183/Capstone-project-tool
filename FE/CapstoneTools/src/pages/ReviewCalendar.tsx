@@ -45,7 +45,7 @@ const defaultSlotForm: SlotFormState = {
 const canManageSchedule = (role: string | null) =>
     role === 'Admin' || role === 'Lecturer' || role === 'CouncilMember';
 
-const councilMemberIdPattern = /^CM\d{3}$/i;
+const reviewerIdPattern = /^(CM\d{3}|[A-Z]{2}\d{6})$/i;
 
 const toDateInputValue = (value: string) => {
     if (!value || value === 'Not scheduled') return '';
@@ -228,12 +228,12 @@ export default function ReviewCalendar() {
         }
 
         if (councilMemberIds.length === 0) {
-            setFormError('At least one council member ID is required.');
+            setFormError('At least one reviewer ID is required.');
             return;
         }
 
-        if (councilMemberIds.some(memberId => !councilMemberIdPattern.test(memberId))) {
-            setFormError('Council member ID must start with CM followed by 3 numbers, for example CM001.');
+        if (councilMemberIds.some(memberId => !reviewerIdPattern.test(memberId))) {
+            setFormError('Reviewer ID must be a council ID like CM001 or a lecturer ID like SE192879.');
             return;
         }
 
@@ -401,12 +401,12 @@ export default function ReviewCalendar() {
                         </label>
 
                         <label className="schedule-form-wide">
-                            Council Member IDs
+                            Reviewer IDs
                             <input
                                 type="text"
                                 value={slotForm.councilMemberIds}
                                 onChange={(e) => setSlotForm({ ...slotForm, councilMemberIds: e.target.value })}
-                                placeholder="CM001, CM002"
+                                placeholder="CM001, SE192879"
                                 required
                             />
                         </label>

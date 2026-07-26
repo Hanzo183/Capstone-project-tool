@@ -256,7 +256,7 @@ app.MapPost("/schedule/assign", async (AssignSlotRequest request, SchedulingDbCo
         return Results.BadRequest(new { message = "Duration must be greater than 0 minutes." });
     }
 
-    var councilIdError = ValidateCouncilMemberIds(request.CouncilMemberIds);
+    var councilIdError = ValidateReviewerIds(request.CouncilMemberIds);
     if (councilIdError is not null)
     {
         return Results.BadRequest(new { message = councilIdError });
@@ -280,7 +280,7 @@ app.MapPost("/schedule/assign", async (AssignSlotRequest request, SchedulingDbCo
     };
 
     var councilMemberIds = request.CouncilMemberIds
-        .Select(NormalizeCouncilMemberId)
+        .Select(NormalizeReviewerId)
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToArray();
     db.ScheduleSlots.Add(slot);
@@ -361,7 +361,7 @@ app.MapPut("/schedule/{id}", async (string id, AssignSlotRequest request, Schedu
         return Results.BadRequest(new { message = "Duration must be greater than 0 minutes." });
     }
 
-    var councilIdError = ValidateCouncilMemberIds(request.CouncilMemberIds);
+    var councilIdError = ValidateReviewerIds(request.CouncilMemberIds);
     if (councilIdError is not null)
     {
         return Results.BadRequest(new { message = councilIdError });
@@ -388,7 +388,7 @@ app.MapPut("/schedule/{id}", async (string id, AssignSlotRequest request, Schedu
     var existingReviewers = await db.SlotReviewers.Where(reviewer => reviewer.SlotId == id).ToListAsync();
     db.SlotReviewers.RemoveRange(existingReviewers);
     var councilMemberIds = request.CouncilMemberIds
-        .Select(NormalizeCouncilMemberId)
+        .Select(NormalizeReviewerId)
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToArray();
     foreach (var memberId in councilMemberIds)
@@ -514,23 +514,27 @@ static bool HasRole(ClaimsPrincipal user, params string[] roles)
     return roleClaims.Any(claim => roles.Any(role => string.Equals(claim.Value, role, StringComparison.OrdinalIgnoreCase)));
 }
 
-static string? ValidateCouncilMemberIds(string[]? councilMemberIds)
+static string? ValidateReviewerIds(string[]? reviewerIds)
 {
-    if (councilMemberIds is null || councilMemberIds.Length == 0)
+    if (reviewerIds is null || reviewerIds.Length == 0)
     {
-        return "At least one council member is required.";
+        return "At least one reviewer is required.";
     }
 
-    return councilMemberIds.Any(memberId => string.IsNullOrWhiteSpace(memberId) || !IsValidCouncilMemberId(memberId))
-        ? "Council member ID must start with CM followed by 3 numbers, for example CM001."
+    return reviewerIds.Any(reviewerId => string.IsNullOrWhiteSpace(reviewerId) || !IsValidReviewerId(reviewerId))
+        ? "Reviewer ID must be a council ID like CM001 or a lecturer ID like SE192879."
         : null;
 }
 
-static string NormalizeCouncilMemberId(string councilMemberId) =>
-    councilMemberId.Trim().ToUpperInvariant();
+static string NormalizeReviewerId(string reviewerId) =>
+    reviewerId.Trim().ToUpperInvariant();
 
-static bool IsValidCouncilMemberId(string councilMemberId) =>
-    Regex.IsMatch(NormalizeCouncilMemberId(councilMemberId), "^CM\\d{3}$");
+static bool IsValidReviewerId(string reviewerId)
+{
+    var normalizedReviewerId = NormalizeReviewerId(reviewerId);
+    return Regex.IsMatch(normalizedReviewerId, "^CM\\d{3}$") ||
+        Regex.IsMatch(normalizedReviewerId, "^[A-Z]{2}\\d{6}$");
+}
 
 sealed class SchedulingJobs(SchedulingDbContext db, ILogger<SchedulingJobs> logger, IntegrationEventPublisher events)
 {
