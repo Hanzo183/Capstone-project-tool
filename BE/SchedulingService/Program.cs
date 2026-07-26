@@ -544,8 +544,19 @@ sealed class SchedulingJobs(SchedulingDbContext db, ILogger<SchedulingJobs> logg
             .OrderBy(slot => slot.ReviewDate)
             .ToListAsync();
 
+        var slotIds = upcomingSlots.Select(slot => slot.Id).ToList();
+        var slotReviewers = await db.SlotReviewers
+            .AsNoTracking()
+            .Where(reviewer => slotIds.Contains(reviewer.SlotId))
+            .ToListAsync();
+        var reviewersBySlot = slotReviewers.ToLookup(reviewer => reviewer.SlotId, reviewer => reviewer.UserId);
+
         foreach (var slot in upcomingSlots)
         {
+            var councilMemberIds = reviewersBySlot[slot.Id]
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
             await events.PublishAsync("deadline.reminder", new
             {
                 slot.Id,
@@ -553,13 +564,15 @@ sealed class SchedulingJobs(SchedulingDbContext db, ILogger<SchedulingJobs> logg
                 slot.ProjectId,
                 slot.ReviewDate,
                 slot.Room,
-                slot.DurationMinutes
+                slot.DurationMinutes,
+                CouncilMemberIds = councilMemberIds
             });
             logger.LogInformation(
-                "deadline.reminder event published for project {ProjectId} in round {RoundId} at {ReviewDate}",
+                "deadline.reminder event published for project {ProjectId} in round {RoundId} at {ReviewDate} for {ReviewerCount} reviewers",
                 slot.ProjectId,
                 slot.RoundId,
-                slot.ReviewDate);
+                slot.ReviewDate,
+                councilMemberIds.Length);
         }
 
         return new DeadlineReminderResult(upcomingSlots.Count);

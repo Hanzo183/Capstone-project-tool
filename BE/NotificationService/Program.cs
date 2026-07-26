@@ -382,8 +382,9 @@ static class NotificationFactory
             "user.registered" => CreateOne(payload, "UserId", "Welcome to Capstone Review Tool", "Your account has been created.", integrationEvent.Name),
             "project.submitted" => CreateOne(payload, "LecturerId", "New project submission", $"{Read(payload, "Title", "A project")} uploaded {Read(payload, "FileName", "a file")}.", integrationEvent.Name),
             "schedule.created" => CreateScheduleNotifications(payload, integrationEvent.Name),
+            "schedule.updated" => CreateScheduleNotifications(payload, integrationEvent.Name),
             "evaluation.completed" => CreateOne(payload, "StudentId", "Evaluation completed", $"Score released for project {Read(payload, "ProjectId", "unknown")}.", integrationEvent.Name),
-            "deadline.reminder" => CreateOne(payload, "ProjectId", "Review deadline reminder", $"Review slot starts at {Read(payload, "ReviewDate", "the scheduled time")}.", integrationEvent.Name),
+            "deadline.reminder" => CreateReviewReminderNotifications(payload, integrationEvent.Name),
             "rebuttal.submitted" => CreateOne(payload, "EvaluatorId", "Rebuttal pending review", $"A rebuttal was submitted for project {Read(payload, "ProjectId", "unknown")}.", integrationEvent.Name),
             "rebuttal.reviewed" => CreateOne(payload, "StudentId", "Rebuttal reviewed", BuildRebuttalReviewedBody(payload), integrationEvent.Name),
             _ => []
@@ -401,7 +402,7 @@ static class NotificationFactory
 
     private static IEnumerable<NotificationItem> CreateScheduleNotifications(JsonElement payload, string type)
     {
-        if (!payload.TryGetProperty("CouncilMemberIds", out var members) || members.ValueKind != JsonValueKind.Array)
+        if (!TryGetProperty(payload, "CouncilMemberIds", out var members) || members.ValueKind != JsonValueKind.Array)
         {
             return [];
         }
@@ -411,6 +412,22 @@ static class NotificationFactory
             .Select(member => member.GetString())
             .Where(userId => !string.IsNullOrWhiteSpace(userId))
             .Select(userId => New(userId!, "Review slot assigned", $"Project {Read(payload, "ProjectId", "unknown")} is scheduled in room {Read(payload, "Room", "TBA")}.", type));
+    }
+
+    private static IEnumerable<NotificationItem> CreateReviewReminderNotifications(JsonElement payload, string type)
+    {
+        if (!TryGetProperty(payload, "CouncilMemberIds", out var members) || members.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var body = $"Project {Read(payload, "ProjectId", "unknown")} has a review slot at {Read(payload, "ReviewDate", "the scheduled time")} in room {Read(payload, "Room", "TBA")}.";
+        return members
+            .EnumerateArray()
+            .Select(member => member.GetString())
+            .Where(userId => !string.IsNullOrWhiteSpace(userId))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(userId => New(userId!, "Upcoming review reminder", body, type));
     }
 
     private static IEnumerable<NotificationItem> CreateOne(JsonElement payload, string userProperty, string title, string body, string type)
@@ -432,7 +449,7 @@ static class NotificationFactory
 
     private static string Read(JsonElement payload, string property, string fallback)
     {
-        if (!payload.TryGetProperty(property, out var value))
+        if (!TryGetProperty(payload, property, out var value))
         {
             return fallback;
         }
@@ -445,6 +462,26 @@ static class NotificationFactory
             JsonValueKind.False => "false",
             _ => fallback
         };
+    }
+
+    private static bool TryGetProperty(JsonElement payload, string property, out JsonElement value)
+    {
+        if (payload.TryGetProperty(property, out value))
+        {
+            return true;
+        }
+
+        foreach (var candidate in payload.EnumerateObject())
+        {
+            if (string.Equals(candidate.Name, property, StringComparison.OrdinalIgnoreCase))
+            {
+                value = candidate.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
     }
 }
 
