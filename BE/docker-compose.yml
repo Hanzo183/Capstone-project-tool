@@ -96,6 +96,7 @@ services:
       context: ./SchedulingService
       dockerfile: Dockerfile
     container_name: scheduling-svc
+    restart: on-failure
     environment:
       - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=SchedulingDb;User Id=sa;Password=YourStrong@Passw0rd!;TrustServerCertificate=True;
       - Jwt__SigningKey=capstone-review-tool-development-signing-key
